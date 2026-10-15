@@ -1,0 +1,109 @@
+﻿@page "/clients"
+@rendermode InteractiveServer
+@using VTMF.Settings.Services
+@inject SqlConnectionProvider SqlConnectionProvider
+@inject NavigationManager NavigationManager
+
+<PageTitle>Clients</PageTitle>
+
+<div class="container py-5">
+    <h1 class="mb-2">Clients</h1>
+    <p class="text-muted fs-6 mb-4">Select a client to manage its process types</p>
+
+    @if (isLoading)
+    {
+        <div class="d-flex justify-content-center align-items-center py-5">
+            <p class="text-muted">⏳ Loading clients...</p>
+        </div>
+    }
+    else if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <div class="alert alert-danger" role="alert">
+            @errorMessage
+        </div>
+    }
+    else if (clients.Any())
+    {
+        <div class="row g-4">
+            @foreach (var client in clients)
+            {
+                <div class="col-lg-4 col-md-6 col-sm-12">
+                    <div class="card h-100 shadow-sm border-0 cursor-pointer"
+                         @onclick="() => SelectClient(client)"
+                         style="cursor: pointer; transition: all 0.3s ease;">
+                        <div class="card-body text-center d-flex flex-column align-items-center">
+                            <h5 class="card-title fw-bold mb-3">@client</h5>
+                            <small class="text-primary fw-medium">View Process Types →</small>
+                            <div class="text-muted" @onclick="() => SelectScheduler(client)" @onclick:stopPropagation>Scheduler →</div>
+                            <div class="text-muted" @onclick="() => SelectInstaller(client)" @onclick:stopPropagation>Installer →</div>
+                            <div class="text-muted" @onclick="() => SelectWorkers(client)" @onclick:stopPropagation>Workers →</div>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="text-center py-5">
+            <p class="text-muted">No clients found.</p>
+        </div>
+    }
+</div>
+
+@code {
+    private List<string> clients = new();
+    private bool isLoading = true;
+    private string? errorMessage;
+
+    protected override Task OnInitializedAsync()
+    {
+        try
+        {
+            clients = SqlConnectionProvider.GetAvailableClients().ToList();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error loading clients: {ex.Message}";
+        }
+        finally
+        {
+            isLoading = false;
+        }
+        return Task.CompletedTask;
+    }
+
+    private void SelectClient(string client)
+    {
+        NavigationManager.NavigateTo($"/process-types/{client}");
+    }
+
+    private void SelectActivity(string client)
+    {
+        NavigationManager.NavigateTo($"/select-activity/{client}");
+    }
+
+    private void SelectScheduler(string client)
+    {
+        NavigationManager.NavigateTo($"/scheduler/{client}");
+    }
+    private void SelectInstaller(string client)
+    {
+        NavigationManager.NavigateTo($"/installer/{client}");
+    }
+    private void SelectWorkers(string client)
+    {
+        NavigationManager.NavigateTo($"/workers/{client}");
+    }
+}
+
+<style>
+    .cursor-pointer {
+        transition: all 0.3s ease;
+    }
+
+        .cursor-pointer:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.15) !important;
+        }
+</style>

@@ -1,0 +1,212 @@
+﻿@inject ISchedulerService SchedulerService
+@inject ToastService ToastService
+
+@if (schedulerJob is null)
+{
+    <p><em>Loading...</em></p>
+}
+else
+{
+    <div class="mb-3">
+        <label class="form-label"><strong>Query:</strong></label>
+        <h2>@schedulerJob.Query</h2>
+    </div>
+
+    <EditForm Model="schedulerJob" OnValidSubmit="OnSave">
+        <DataAnnotationsValidator />
+        <ValidationSummary />
+        
+        @if (!string.IsNullOrEmpty(validationMessage))
+        {
+            <div class="alert alert-danger" role="alert">
+                @validationMessage
+            </div>
+        }
+
+        <div class="mb-3">
+            <label for="seconds" class="form-label">Seconds</label>
+            <InputNumber id="seconds" class="form-control" @bind-Value="schedulerJob.Seconds" />
+        </div>
+        <div class="mb-3">
+            <label for="cron" class="form-label">Cron</label>
+            <div class="input-group">
+                <InputText id="cron" class="form-control" @bind-Value="schedulerJob.Cron" />
+                <Button class="btn btn-outline-secondary" Type="ButtonType.Button" @onclick="ValidateCron">
+                    Validate
+                </Button>
+            </div>
+            @if (!string.IsNullOrEmpty(cronDescription))
+            {
+                <small class="form-text text-muted d-block mt-2">
+                    <strong>Description:</strong> @cronDescription
+                </small>
+            }
+            @if (!string.IsNullOrEmpty(cronError))
+            {
+                <small class="form-text text-danger d-block mt-2">
+                    <strong>Error:</strong> @cronError
+                </small>
+            }
+        </div>
+        
+        <div class="mb-3">
+            <label for="fromHours" class="form-label">From Hours</label>
+            <InputNumber id="fromHours" class="form-control" @bind-Value="schedulerJob.FromHours" />
+        </div>
+        <div class="mb-3">
+            <label for="toHours" class="form-label">To Hours</label>
+            <InputNumber id="toHours" class="form-control" @bind-Value="schedulerJob.ToHours" />
+        </div>
+        
+        <Button class="mt-3" Color="ButtonColor.Primary" Type="ButtonType.Submit">
+            Save
+        </Button>
+    </EditForm>
+}
+
+<Button class="mt-3" Color="ButtonColor.Secondary" Type="ButtonType.Button" @onclick="OnCancel">
+    Cancel
+</Button>
+
+@code {
+    private SchedulerJob? schedulerJob;
+    private string validationMessage = string.Empty;
+    private string cronDescription = string.Empty;
+    private string cronError = string.Empty;
+
+    [Parameter] public string ClientName { get; set; } = string.Empty;
+    [Parameter] public string SchedulerJobName { get; set; } = string.Empty;
+
+    [Parameter] public EventCallback<EventArgs> OnSaved { get; set; }
+    [Parameter] public EventCallback<EventArgs> OnCancelled { get; set; }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await base.OnParametersSetAsync();
+        schedulerJob = await SchedulerService.GetJobByNameAsync(new ClientInfo(ClientName), SchedulerJobName);
+
+        // Load initial cron description if cron is set
+        if (!string.IsNullOrWhiteSpace(schedulerJob?.Cron))
+        {
+            UpdateCronDescription(schedulerJob.Cron);
+        }
+    }
+    
+
+    private void ValidateCron()
+    {
+        if (schedulerJob is null)
+            return;
+        
+        UpdateCronDescription(schedulerJob.Cron ?? string.Empty);
+    }
+
+    private void UpdateCronDescription(string cron)
+    {
+        cronDescription = string.Empty;
+        cronError = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(cron))
+            return;
+
+        try
+        {
+            cronDescription = CronExpressionDescriptor.ExpressionDescriptor.GetDescription(cron);
+        }
+        catch (Exception ex)
+        {
+            cronError = ex.Message;
+        }
+    }
+
+    private async Task OnSave()
+    {
+        if (schedulerJob is null)
+            return;
+
+        validationMessage = string.Empty;
+
+        // Validate that either Seconds or Cron is set, but not both
+        bool hasSeconds = schedulerJob.Seconds.HasValue && schedulerJob.Seconds.Value > 0;
+        bool hasCron = !string.IsNullOrWhiteSpace(schedulerJob.Cron);
+
+        if ((hasSeconds && hasCron) || (!hasSeconds && !hasCron))
+        {
+            validationMessage = "Either Seconds or Cron must be set, but not both.";
+            ShowMessage(ToastType.Danger, validationMessage);
+            return;
+        }
+
+        if (hasSeconds)
+        {
+            
+            if (schedulerJob.FromHours <= 0 || schedulerJob.FromHours > 23 ||
+                schedulerJob.ToHours <= 0 || schedulerJob.ToHours > 23)
+            {
+                validationMessage = "From Hours and To Hours must be between 0 and 23.";
+                ShowMessage(ToastType.Danger, validationMessage);
+                return;
+            }
+            if (schedulerJob.FromHours >= schedulerJob.ToHours)
+            {
+                validationMessage = "From Hours must be less than To Hours.";
+                ShowMessage(ToastType.Danger, validationMessage);
+                return;
+            }
+            
+            // Validate Seconds
+            if (schedulerJob.Seconds <= 0)
+            {
+                validationMessage = "Seconds must be a positive integer.";
+                ShowMessage(ToastType.Danger, validationMessage);
+                return;
+            }
+        }
+
+        if (hasCron)
+        {
+            // Validate Cron expression
+            try
+            {
+                var description = CronExpressionDescriptor.ExpressionDescriptor.GetDescription(schedulerJob.Cron!);
+                if (string.IsNullOrEmpty(description))
+                {
+                    validationMessage = "Invalid Cron expression";
+                    ShowMessage(ToastType.Danger, validationMessage);
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                validationMessage = $"Invalid Cron expression: {ex.Message}";
+                ShowMessage(ToastType.Danger, validationMessage);
+                return;
+            }
+        }
+
+        if (hasCron)
+        {
+            // Clear Seconds and time window if Cron is used
+            schedulerJob.Seconds = null;
+            schedulerJob.FromHours = 0;
+            schedulerJob.ToHours = 0;
+        }
+        var (success, message) = await SchedulerService.UpdateSchedulerJob(new ClientInfo(ClientName), schedulerJob);
+        if (!success)
+        {
+            ShowMessage(ToastType.Danger, message);
+            return;
+        }
+
+        if (OnSaved.HasDelegate)
+            await OnSaved.InvokeAsync();
+    }
+
+    private async Task OnCancel()
+    {
+        if (OnCancelled.HasDelegate)
+            await OnCancelled.InvokeAsync();
+    }
+
+    private void ShowMessage(ToastType toastType, string message) => ToastService.Notify(new ToastMessage(toastType, message));
+}

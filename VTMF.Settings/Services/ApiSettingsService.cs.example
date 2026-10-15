@@ -1,0 +1,226 @@
+using VTMF.Settings.Entities;
+
+namespace VTMF.Settings.Services;
+
+/// <summary>
+/// Example implementation of ISettingsService that connects to REST APIs
+/// This demonstrates how to implement the service interface for production use
+/// Customize the endpoints and error handling according to your API specifications
+/// </summary>
+public class ApiSettingsService : ISettingsService
+{
+    private readonly HttpClient _httpClient;
+    private readonly ILogger<ApiSettingsService> _logger;
+
+    public ApiSettingsService(HttpClient httpClient, ILogger<ApiSettingsService> logger)
+    {
+        _httpClient = httpClient;
+        _logger = logger;
+    }
+
+    public async Task<ICollection<ProcessType>> GetProcessTypes()
+    {
+        try
+        {
+            _logger.LogInformation("Fetching process types");
+            
+            var response = await _httpClient.GetAsync("api/process-types");
+            response.EnsureSuccessStatusCode();
+            
+            var processTypes = await response.Content.ReadFromJsonAsync<List<ProcessType>>();
+            return processTypes ?? new List<ProcessType>();
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogError(ex, "Error fetching process types from API");
+            throw new ApplicationException("Failed to retrieve process types", ex);
+        }
+    }
+
+    public async Task<ICollection<string>> GetStoreTables(ProcessType forProcess)
+    {
+        try
+        {
+            _logger.LogInformation("Fetching store tables for process: {ProcessName}", forProcess.Name);
+            
+            var response = await _httpClient.GetAsync($"api/process-types/{Uri.EscapeDataString(forProcess.Name)}/store-tables");
+            response.EnsureSuccessStatusCode();
+            
+            var storeTables = await response.Content.ReadFromJsonAsync<List<string>>();
+            return storeTables ?? new List<string>();
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogError(ex, "Error fetching store tables for process: {ProcessName}", forProcess.Name);
+            throw new ApplicationException($"Failed to retrieve store tables for {forProcess.Name}", ex);
+        }
+    }
+
+    public async Task<ICollection<Setting>> GetCurrentSettings(ProcessType forProcess, string storeTable)
+    {
+        try
+        {
+            _logger.LogInformation("Fetching current settings for process: {ProcessName}, table: {StoreTable}", 
+                forProcess.Name, storeTable);
+            
+            var url = $"api/settings/current?processType={Uri.EscapeDataString(forProcess.Name)}&storeTable={Uri.EscapeDataString(storeTable)}";
+            var response = await _httpClient.GetAsync(url);
+            response.EnsureSuccessStatusCode();
+            
+            var settings = await response.Content.ReadFromJsonAsync<List<Setting>>();
+            return settings ?? new List<Setting>();
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogError(ex, "Error fetching current settings");
+            throw new ApplicationException("Failed to retrieve current settings", ex);
+        }
+    }
+
+    public async Task<ICollection<Setting>> GetAvailableSettings(ProcessType forProcess, string storeTable)
+    {
+        try
+        {
+            _logger.LogInformation("Fetching available settings for process: {ProcessName}, table: {StoreTable}", 
+                forProcess.Name, storeTable);
+            
+            var url = $"api/settings/available?processType={Uri.EscapeDataString(forProcess.Name)}&storeTable={Uri.EscapeDataString(storeTable)}";
+            var response = await _httpClient.GetAsync(url);
+            response.EnsureSuccessStatusCode();
+            
+            var settings = await response.Content.ReadFromJsonAsync<List<Setting>>();
+            return settings ?? new List<Setting>();
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogError(ex, "Error fetching available settings");
+            throw new ApplicationException("Failed to retrieve available settings", ex);
+        }
+    }
+
+    public async ValueTask<Feature> GetFeature(string featureName)
+    {
+        try
+        {
+            _logger.LogDebug("Fetching feature: {FeatureName}", featureName);
+            
+            var response = await _httpClient.GetAsync($"api/metadata/features/{Uri.EscapeDataString(featureName)}");
+            
+            if (response.IsSuccessStatusCode)
+            {
+                var feature = await response.Content.ReadFromJsonAsync<Feature>();
+                return feature ?? new Feature { Name = featureName };
+            }
+            
+            _logger.LogWarning("Feature not found: {FeatureName}", featureName);
+            return new Feature { Name = featureName };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching feature: {FeatureName}", featureName);
+            return new Feature { Name = featureName };
+        }
+    }
+
+    public async ValueTask<SettingValueDescription> GetSettingValueDescription(string settingName, string value)
+    {
+        try
+        {
+            _logger.LogDebug("Fetching value description for setting: {SettingName}, value: {Value}", 
+                settingName, value);
+            
+            var url = $"api/metadata/settings/{Uri.EscapeDataString(settingName)}/values/{Uri.EscapeDataString(value)}/description";
+            var response = await _httpClient.GetAsync(url);
+            
+            if (response.IsSuccessStatusCode)
+            {
+                var description = await response.Content.ReadFromJsonAsync<SettingValueDescription>();
+                return description ?? new SettingValueDescription { SettingName = settingName, Value = value };
+            }
+            
+            return new SettingValueDescription { SettingName = settingName, Value = value };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching value description");
+            return new SettingValueDescription { SettingName = settingName, Value = value };
+        }
+    }
+
+    public async ValueTask<SettingDescription> GetSettingDescription(string settingName)
+    {
+        try
+        {
+            _logger.LogDebug("Fetching setting description: {SettingName}", settingName);
+            
+            var response = await _httpClient.GetAsync($"api/metadata/settings/{Uri.EscapeDataString(settingName)}/description");
+            
+            if (response.IsSuccessStatusCode)
+            {
+                var description = await response.Content.ReadFromJsonAsync<SettingDescription>();
+                return description ?? new SettingDescription { SettingName = settingName };
+            }
+            
+            return new SettingDescription { SettingName = settingName };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching setting description: {SettingName}", settingName);
+            return new SettingDescription { SettingName = settingName };
+        }
+    }
+
+    public async Task<ICollection<SettingValuesList>> GetSettingValuesLists(string settingName)
+    {
+        try
+        {
+            _logger.LogDebug("Fetching values lists for setting: {SettingName}", settingName);
+            
+            var response = await _httpClient.GetAsync($"api/metadata/settings/{Uri.EscapeDataString(settingName)}/values-lists");
+            
+            if (response.IsSuccessStatusCode)
+            {
+                var valuesLists = await response.Content.ReadFromJsonAsync<List<SettingValuesList>>();
+                return valuesLists ?? new List<SettingValuesList>();
+            }
+            
+            return new List<SettingValuesList>();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error fetching values lists for setting: {SettingName}", settingName);
+            return new List<SettingValuesList>();
+        }
+    }
+
+    /// <summary>
+    /// Save settings back to the API (example implementation)
+    /// Add this method to ISettingsService interface if you need save functionality
+    /// </summary>
+    public async Task<bool> SaveSettings(ProcessType processType, string storeTable, ICollection<Setting> settings)
+    {
+        try
+        {
+            _logger.LogInformation("Saving settings for process: {ProcessName}, table: {StoreTable}", 
+                processType.Name, storeTable);
+            
+            var request = new
+            {
+                ProcessType = processType.Name,
+                StoreTable = storeTable,
+                Settings = settings
+            };
+            
+            var response = await _httpClient.PostAsJsonAsync("api/settings/save", request);
+            response.EnsureSuccessStatusCode();
+            
+            _logger.LogInformation("Successfully saved {Count} settings", settings.Count);
+            return true;
+        }
+        catch (HttpRequestException ex)
+        {
+            _logger.LogError(ex, "Error saving settings");
+            return false;
+        }
+    }
+}

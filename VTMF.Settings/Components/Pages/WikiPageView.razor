@@ -1,0 +1,325 @@
+@page "/wiki/new"
+@page "/wiki/{Id:int}"
+@rendermode InteractiveServer
+@inject IWikiService WikiService
+@inject IWikiImageService WikiImageService
+@inject NavigationManager NavigationManager
+@inject ToastService ToastService
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<PageTitle>@(wikiPage?.Title ?? "Wiki")</PageTitle>
+
+<ConfirmDialog @ref="deleteConfirmDialog" />
+
+<div class="container py-4">
+    <div class="mb-3">
+        <Button Color="ButtonColor.Link" @onclick="BackToList">
+            <Icon Name="IconName.ArrowLeft" class="me-1" />Back to wiki
+        </Button>
+    </div>
+
+    @if (isLoading)
+    {
+        <p class="text-muted">⏳ Loading...</p>
+    }
+    else if (wikiPage is null)
+    {
+        <div class="alert alert-warning" role="alert">Wiki page not found.</div>
+    }
+    else if (isEditMode)
+    {
+        <EditForm Model="wikiPage" OnValidSubmit="OnSave">
+            <DataAnnotationsValidator />
+            <ValidationSummary />
+
+            @if (!string.IsNullOrEmpty(validationMessage))
+            {
+                <div class="alert alert-danger" role="alert">@validationMessage</div>
+            }
+
+            <div class="mb-3">
+                <label for="wikiTitle" class="form-label">Title</label>
+                <InputText id="wikiTitle" class="form-control" @bind-Value="wikiPage.Title" />
+            </div>
+            <div class="mb-3">
+                <label for="wikiContent" class="form-label">Content (Markdown)</label>
+                <TextAreaInput id="wikiContent" @bind-Value="wikiPage.Content" Rows="20" Placeholder="Write markdown here..." />
+            </div>
+            <div class="mb-3">
+                <label for="wikiImageUpload" class="form-label">Insert image (PNG/JPG, max 3 MB)</label>
+                <InputFile id="wikiImageUpload" class="form-control" accept=".png,.jpg,.jpeg"
+                           OnChange="OnImageSelected" disabled="@isUploading" />
+                @if (isUploading)
+                {
+                    <small class="text-muted">⏳ Uploading...</small>
+                }
+            </div>
+
+            <Button Color="ButtonColor.Primary" Type="ButtonType.Submit" Disabled="isUploading">
+                <Icon Name="IconName.Save" class="me-1" />Save
+            </Button>
+            <Button class="ms-2" Color="ButtonColor.Secondary" Type="ButtonType.Button" @onclick="OnCancelEdit" Disabled="isUploading">
+                Cancel
+            </Button>
+        </EditForm>
+    }
+    else
+    {
+        <div class="d-flex justify-content-between align-items-start mb-3">
+            <div>
+                <h1 class="mb-1">@wikiPage.Title</h1>
+                <small class="text-muted">Last updated: @wikiPage.LastUpdated.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</small>
+            </div>
+            <div>
+                <Button Color="ButtonColor.Primary" @onclick="EnterEditMode">
+                    <Icon Name="IconName.Pencil" class="me-1" />Edit
+                </Button>
+                <Button class="ms-2" Color="ButtonColor.Danger" @onclick="OnDeleteClick">
+                    <Icon Name="IconName.Trash" class="me-1" />Delete
+                </Button>
+            </div>
+        </div>
+        <hr />
+        <div class="wiki-content">
+            @if (string.IsNullOrWhiteSpace(wikiPage.Content))
+            {
+                <p class="text-muted"><em>This page is empty. Click Edit to add content.</em></p>
+            }
+            else
+            {
+                <Markdown @key="wikiPage.Id">@wikiPage.Content</Markdown>
+            }
+        </div>
+    }
+</div>
+
+<style>
+    .wiki-content {
+        line-height: 1.6;
+    }
+</style>
+
+@code {
+    private const long MaxImageBytes = 3 * 1024 * 1024;
+
+    [Parameter] public int? Id { get; set; }
+
+    private WikiPage? wikiPage;
+    private bool isLoading = true;
+    private bool isEditMode;
+    private bool isUploading;
+    private string validationMessage = string.Empty;
+    private ConfirmDialog? deleteConfirmDialog;
+    private IJSObjectReference? wikiJsModule;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        isLoading = true;
+        validationMessage = string.Empty;
+
+        if (Id is null)
+        {
+            wikiPage = new WikiPage { LastUpdated = DateTime.UtcNow };
+            isEditMode = true;
+        }
+        else
+        {
+            wikiPage = await WikiService.GetByIdAsync(Id.Value);
+            isEditMode = false;
+        }
+
+        isLoading = false;
+    }
+
+    private void EnterEditMode()
+    {
+        validationMessage = string.Empty;
+        isEditMode = true;
+    }
+
+    private async Task OnCancelEdit()
+    {
+        if (Id is null)
+        {
+            BackToList();
+            return;
+        }
+
+        validationMessage = string.Empty;
+        wikiPage = await WikiService.GetByIdAsync(Id.Value);
+        isEditMode = false;
+    }
+
+    private async Task OnSave()
+    {
+        if (wikiPage is null)
+            return;
+
+        validationMessage = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(wikiPage.Title))
+        {
+            validationMessage = "Title is required.";
+            ShowMessage(ToastType.Danger, validationMessage);
+            return;
+        }
+
+        if (Id is null)
+        {
+            var (success, message, newId) = await WikiService.CreateAsync(wikiPage);
+            if (!success)
+            {
+                validationMessage = message;
+                ShowMessage(ToastType.Danger, message);
+                return;
+            }
+            ShowMessage(ToastType.Success, message);
+            NavigationManager.NavigateTo($"/wiki/{newId}");
+        }
+        else
+        {
+            var (success, message) = await WikiService.UpdateAsync(wikiPage);
+            if (!success)
+            {
+                validationMessage = message;
+                ShowMessage(ToastType.Danger, message);
+                return;
+            }
+            ShowMessage(ToastType.Success, message);
+            isEditMode = false;
+        }
+    }
+
+    private async Task OnImageSelected(InputFileChangeEventArgs e)
+    {
+        if (wikiPage is null)
+            return;
+
+        var file = e.File;
+        if (file is null)
+            return;
+
+        validationMessage = string.Empty;
+
+        if (file.Size <= 0)
+        {
+            validationMessage = "Selected file is empty.";
+            ShowMessage(ToastType.Danger, validationMessage);
+            return;
+        }
+
+        if (file.Size > MaxImageBytes)
+        {
+            validationMessage = $"File exceeds the {MaxImageBytes / (1024 * 1024)} MB limit.";
+            ShowMessage(ToastType.Danger, validationMessage);
+            return;
+        }
+
+        isUploading = true;
+        StateHasChanged();
+
+        try
+        {
+            await using var stream = file.OpenReadStream(MaxImageBytes);
+            var (success, message, newId) = await WikiImageService.UploadAsync(
+                file.Name,
+                file.ContentType,
+                stream,
+                file.Size);
+
+            if (!success)
+            {
+                validationMessage = message;
+                ShowMessage(ToastType.Danger, message);
+                return;
+            }
+
+            var snippet = $"![{file.Name}](/wiki/image/{newId})";
+            var updated = await InsertAtCursorAsync("wikiContent", snippet);
+            if (updated is not null)
+            {
+                wikiPage.Content = updated;
+            }
+            else
+            {
+                wikiPage.Content = string.IsNullOrEmpty(wikiPage.Content)
+                    ? snippet
+                    : wikiPage.Content + "\n" + snippet;
+            }
+
+            ShowMessage(ToastType.Success, message);
+        }
+        catch (IOException ex)
+        {
+            validationMessage = $"Upload failed: {ex.Message}";
+            ShowMessage(ToastType.Danger, validationMessage);
+        }
+        finally
+        {
+            isUploading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task<string?> InsertAtCursorAsync(string textareaId, string text)
+    {
+        try
+        {
+            wikiJsModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/wiki.js");
+            return await wikiJsModule.InvokeAsync<string?>("insertAtCursor", textareaId, text);
+        }
+        catch (JSException)
+        {
+            return null;
+        }
+        catch (JSDisconnectedException)
+        {
+            return null;
+        }
+    }
+
+    private async Task OnDeleteClick()
+    {
+        if (wikiPage is null || deleteConfirmDialog is null || Id is null)
+            return;
+
+        var confirmed = await deleteConfirmDialog.ShowAsync(
+            "Confirm Delete",
+            $"Are you sure you want to delete wiki page '{wikiPage.Title}'?");
+
+        if (!confirmed)
+        {
+            ShowMessage(ToastType.Info, "Delete cancelled.");
+            return;
+        }
+
+        var (success, message) = await WikiService.DeleteAsync(Id.Value);
+        ShowMessage(success ? ToastType.Success : ToastType.Danger, message);
+        if (success)
+            BackToList();
+    }
+
+    private void BackToList() => NavigationManager.NavigateTo("/wiki");
+
+    private void ShowMessage(ToastType toastType, string message) => ToastService.Notify(new ToastMessage(toastType, message));
+
+    public async ValueTask DisposeAsync()
+    {
+        if (wikiJsModule is not null)
+        {
+            try
+            {
+                await wikiJsModule.DisposeAsync();
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+    }
+}

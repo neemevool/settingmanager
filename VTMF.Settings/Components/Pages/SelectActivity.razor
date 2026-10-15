@@ -1,0 +1,48 @@
+﻿@page "/select-activity/{ClientName}"
+@inject NavigationManager NavigationManager
+
+<div class="container py-5 mt-3">
+    
+
+    <div class="row g-4">
+        <h1>Select Activity for @ClientName</h1>
+
+        <Card Class="m-2" Style="width:18rem;">
+            <span Style="font-size: 3rem; text-align: center; display: block; margin-top: 1rem;">⚙️</span>
+            <CardBody Style="display: flex; flex-direction: column; align-items: center; text-align: center;">
+                <CardTitle>Settings</CardTitle>
+                <CardLink Href="#" @onclick="() => NavigateToProcessTypes()" Style="text-decoration: none;">
+                    Settings →
+                </CardLink>
+
+            </CardBody>
+        </Card>
+
+        <Card Class="m-2" Style="width:18rem;">
+            <span Style="font-size: 3rem; text-align: center; display: block; margin-top: 1rem;">⚙️</span>
+            <CardBody Style="display: flex; flex-direction: column; align-items: center; text-align: center;">
+                <CardTitle>Scheduler</CardTitle>
+                <CardLink Href="#" @onclick="() => NavigateToScheduler()" Style="text-decoration: none;">
+                    Scheduler →
+                </CardLink>
+
+            </CardBody>
+        </Card>
+
+    </div>
+
+</div>
+
+@code {
+    [Parameter]
+    public string ClientName { get; set; } = string.Empty;
+    private void NavigateToProcessTypes()
+    {
+        NavigationManager.NavigateTo($"/process-types/{ClientName}");
+    }
+
+    private void NavigateToScheduler()
+    {
+        NavigationManager.NavigateTo($"/scheduler/{ClientName}");
+    }
+}

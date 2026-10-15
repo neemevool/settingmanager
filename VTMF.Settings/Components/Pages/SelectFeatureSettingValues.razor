@@ -1,0 +1,379 @@
+﻿@page "/select-feature-setting-values/{FeatureName}"
+@inject IFeatureManagementService FeatureManagementService
+@inject ISettingsService SettingsService
+@inject SqlConnectionProvider SqlConnectionProvider
+@inject NavigationManager NavigationManager
+@inject ToastService ToastService
+@rendermode InteractiveServer
+@using VTMF.Settings.Entities
+@using System.Collections.Immutable;
+
+<h3>@FeatureName : @selectedFeature?.TableName</h3>
+
+<div class="row">
+    <div class="col-lg-4 col-md-6">
+        <div class="mb-3">
+            <label for="clientSelect" class="form-label fw-bold">Select Client:</label>
+            @if (allClients.Count == 0)
+            {
+                <div class="alert alert-info alert-sm">No clients available.</div>
+            }
+            else
+            {
+                <select id="clientSelect" class="form-select" @onchange="e => OnClientSelected(e.Value?.ToString() ?? string.Empty)">
+                    <option value="">-- Select a client --</option>
+                    @foreach (var client in allClients)
+                    {
+                        <option value="@client">@client</option>
+                    }
+                </select>
+            }
+        </div>
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(selectedClient) && processTables.Count > 0)
+{
+    <div class="row">
+        <div class="col-lg-4 col-md-6">
+            <div class="mb-3">
+                <label for="tableSelect" class="form-label fw-bold">Select Process Table:</label>
+                <select id="tableSelect" class="form-select" @onchange="e => OnTableSelected(e.Value?.ToString() ?? string.Empty)">
+                    <option value="">-- Select a table --</option>
+                    @foreach (var table in processTables)
+                    {
+                        <option value="@table">@table</option>
+                    }
+                </select>
+            </div>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col-lg-4 col-md-6">
+            <div class="mb-3">
+                <label for="tableSelect" class="form-label fw-bold">Select Other Table:</label>
+                <select id="tableSelect" class="form-select" @onchange="e => OnOtherTableSelected(e.Value?.ToString() ?? string.Empty)">
+                    <option value="">-- Select a table --</option>
+                    @foreach (var table in allTables)
+                    {
+                        <option value="@table">@table</option>
+                    }
+                </select>
+            </div>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col-lg-4 col-md-6">
+            <div class="mb-3">
+                <label for="tableSelect" class="form-label fw-bold">ServerProcessSettings:</label>
+                <select id="tableSelect" class="form-select" @onchange="e => OnServerProcessTableSelected(e.Value?.ToString() ?? string.Empty)">
+                    <option value="">-- Select a process --</option>
+                    @foreach (var processType in availableProcessTypes)
+                    {
+                        <option value="@processType.Name">@processType.Name</option>
+                    }
+                </select>
+            </div>
+        </div>
+    </div>
+}
+
+<div style="max-width: 1280px;">
+<Grid TItem="ProposedFeatureValue"
+      @ref="settingsGrid"
+      DataProvider="@SettingValueDataProvider"
+      Class="table table-hover table-bordered table-striped"
+      AllowSelection="true"
+      AllowFiltering="true"
+      SelectionMode="GridSelectionMode.Multiple"
+      SelectedItemsChanged="OnSelectedItemsChanged"
+      Responsive="true">
+    <GridColumns>
+        <GridColumn TItem="ProposedFeatureValue" PropertyName="@nameof(ProposedFeatureValue.OriginalSettingName)" HeaderText="Original" Filterable="true">
+            @context.OriginalSettingName
+        </GridColumn>
+        <GridColumn TItem="ProposedFeatureValue" PropertyName="@nameof(ProposedFeatureValue.SettingName)" HeaderText="Setting" Filterable="true">
+            <span class="@context.BackgroundColor">
+                @context.SettingName
+            </span>
+        </GridColumn>
+        <GridColumn TItem="ProposedFeatureValue" PropertyName="@nameof(ProposedFeatureValue.Value)" HeaderText="Value">
+            @context.Value
+        </GridColumn>
+    </GridColumns>
+</Grid>
+</div>
+
+@if (selectedSettings.Count > 0)
+{
+    <Button Type="ButtonType.Button" Color="ButtonColor.Primary" @onclick="AddToFeature">
+        <Icon Name="IconName.Plus" class="me-1"></Icon>Add Selected To Feature
+    </Button>
+}
+
+@code {
+    [Parameter]
+    public string FeatureName { get; set; } = string.Empty;
+    private Grid<ProposedFeatureValue> settingsGrid = null!;
+    private ImmutableList<string> allClients = ImmutableList<string>.Empty;
+    private IEnumerable<SettingFeatureValue> featureValues = Enumerable.Empty<SettingFeatureValue>();
+    private List<string> processTables = new();
+    private List<string> allTables = new();
+    private SettingFeature? selectedFeature;
+    private string selectedClient = string.Empty;
+    private IEnumerable<ProposedFeatureValue> settings = Enumerable.Empty<ProposedFeatureValue>();
+    private string selectedTable = string.Empty;
+    private HashSet<ProposedFeatureValue> selectedSettings = new();
+    private HashSet<ProposedFeatureValue> emptySet = new();
+    private IEnumerable<ProcessType> availableProcessTypes = Enumerable.Empty<ProcessType>();
+    private ProcessType? selectedProcessTypeForServerProcessSettings;
+
+    protected override void OnInitialized()
+    {
+        try
+        {
+            allClients = SqlConnectionProvider.GetAvailableClients().ToImmutableList();
+        }
+        catch (Exception ex)
+        {
+            ToastService.ShowError($"Error loading clients: {ex.Message}");
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        selectedFeature = await FeatureManagementService.GetFeature(FeatureName);
+        featureValues = await FeatureManagementService.GetFeatureValues(FeatureName);
+
+        if (selectedFeature is null)
+        {
+            ToastService.ShowError($"Feature '{FeatureName}' not found.");
+        }
+
+    }
+
+    private async Task OnClientSelected(string clientName)
+    {
+        selectedClient = clientName;
+        processTables.Clear();
+
+        if (string.IsNullOrEmpty(clientName))
+        {
+            return;
+        }
+
+        ArgumentNullException.ThrowIfNull(selectedFeature, nameof(selectedFeature));
+        var tables = await SettingsService.GetStoreTables(new ClientInfo(clientName), selectedFeature.TableInfo);
+        if (tables is not null)
+        {
+            processTables = tables.Where(t => t != "ServerProcessSettings").ToList();
+
+        }
+        var allTablesList = await SettingsService.GetAllStoreTables(new ClientInfo(clientName));
+        allTables = allTablesList.Where(t => !processTables.Any(table => table == t)).ToList();
+        availableProcessTypes = await SettingsService.GetProcessTypes(clientName);
+    }
+
+    private async Task OnTableSelected(string tableName)
+    {
+        selectedTable = tableName;
+        selectedProcessTypeForServerProcessSettings = null;
+        await settingsGrid.RefreshDataAsync();
+    }
+    private async Task OnOtherTableSelected(string tableName)
+    {
+        selectedTable = tableName;
+        selectedProcessTypeForServerProcessSettings = null;
+        await settingsGrid.RefreshDataAsync();
+    }
+    private async Task OnServerProcessTableSelected(string processTypeName)
+    {
+        if (string.IsNullOrEmpty(processTypeName))
+        {
+            return;
+        }
+        var processType = availableProcessTypes.FirstOrDefault(pt => pt.Name == processTypeName);
+        if (processType is null)
+        {
+            ToastService.ShowError($"Process Type '{processTypeName}' not found.");
+            return;
+        }
+        selectedTable = "ServerProcessSettings";
+        selectedClient = processType.ClientName;
+        selectedProcessTypeForServerProcessSettings = processType;
+        await settingsGrid.RefreshDataAsync();
+    }
+    private async Task<GridDataProviderResult<ProposedFeatureValue>> SettingValueDataProvider(GridDataProviderRequest<ProposedFeatureValue> request)
+    {
+
+        if (selectedFeature is null || string.IsNullOrEmpty(selectedClient) || string.IsNullOrEmpty(selectedTable))
+        {
+            return request.ApplyTo(Enumerable.Empty<ProposedFeatureValue>());
+        }
+
+        if (selectedTable == "ServerProcessSettings" && selectedProcessTypeForServerProcessSettings is not null)
+        {
+            var serverSettings = await SettingsService.GetCurrentSettings(selectedProcessTypeForServerProcessSettings, selectedTable);
+            settings = CalculateProposedFeatureValues(serverSettings);
+            return await Task.FromResult(request.ApplyTo(settings));
+        }
+        else
+        {
+            var ProcessType = new ProcessType()
+                {
+                    ClientName = selectedClient,
+                    Name = selectedFeature.ProcessTypeName,
+                    DisplayLabel = selectedFeature.ProcessTypeName,
+                    Environment = "na",
+                    Id = 1,
+                    ProcessTypeName = selectedFeature.ProcessTypeName,
+                    Tag = string.Empty
+
+                };
+            //Task<IEnumerable<Setting>> GetCurrentSettings(ProcessType forProcess, string storeTable);
+            var currentSettings = await SettingsService.GetCurrentSettings(ProcessType, selectedTable);
+            settings = CalculateProposedFeatureValues(currentSettings);
+            return await Task.FromResult(request.ApplyTo(settings));
+        }
+    }
+
+    private Task OnSelectedItemsChanged(HashSet<ProposedFeatureValue> settings)
+    {
+        selectedSettings = settings is not null && settings.Any() ? settings : emptySet;
+        return Task.CompletedTask;
+    }
+
+    private Task AddToFeature()
+    {
+        if (selectedFeature is null)
+        {
+            ToastService.ShowError("No feature selected.");
+            return Task.CompletedTask;
+        }
+        foreach (var setting in selectedSettings)
+        {
+            if (featureValues.Any(fv => fv.SettingName == setting.SettingName))
+            {
+                continue;
+            }
+            var newFeatureValue = new SettingFeatureValue
+            {
+                FeatureName = selectedFeature.FeatureName,
+                SettingName = setting.SettingName,
+                ParentSettingName = setting.ParentSettingName,
+                SettingValue = setting.Value,
+                StoreTable = setting.TableName,
+                
+            };
+            FeatureManagementService.AddNewFeatureValue(newFeatureValue);
+
+        }
+        ToastService.ShowSuccess($"Added setting(s) to feature.");
+        return Task.CompletedTask;
+    }
+
+    private List<ProposedFeatureValue> CalculateProposedFeatureValues(IEnumerable<Setting> fromSettings)
+    {
+        if (selectedFeature is null)
+        {
+            ToastService.ShowError("No feature selected.");
+            return Enumerable.Empty<ProposedFeatureValue>().ToList();
+        }
+
+        List<ProposedFeatureValue> proposedValues = new();
+        var parentSettingName = selectedFeature.ParentSettingName.Replace(".*", string.Empty);
+        var parentSettingIsWildcard = selectedFeature.ParentSettingName.EndsWith(".*");
+        foreach (var setting in fromSettings)
+        {
+
+            var nameparts = setting.Name.Split('.');
+            if (nameparts.Length < 2)
+            {
+                continue;
+            }
+
+            var targetTable = Setting.GetTableWithoutPrefix(setting.StoreTable);
+            var firstPart = nameparts[0];
+
+            if (SettingTreeNode.GroupSettingPrefixes.Contains(firstPart) && setting.SettingType == "SettingGroup")
+            {
+                continue;
+            }
+
+            var addSettingNamePlaceholder = false;
+            var firstPartIsSameAsParent = firstPart == parentSettingName;
+
+            if (selectedFeature.FeatureType == FeatureTypes.SettingGroup && firstPartIsSameAsParent)
+            {
+                addSettingNamePlaceholder = SettingTreeNode.GroupSettingPrefixes.Contains(firstPart);
+            }
+
+            if (parentSettingIsWildcard && firstPartIsSameAsParent)
+            {
+                addSettingNamePlaceholder = true;
+            }
+
+            var proposedSettingName = addSettingNamePlaceholder
+                    ? firstPart + ".{{settingname}}." + string.Join('.', nameparts.Skip(2))
+                    : setting.Name;
+
+            if (!parentSettingIsWildcard && !String.IsNullOrEmpty(parentSettingName) && firstPartIsSameAsParent)
+            {
+                // remove parent prefix selectedFeature.ParentSettingName + "."
+                proposedSettingName = proposedSettingName.Substring(parentSettingName.Length + 1);
+            }
+
+            var proposedTableName = selectedFeature.TableInfo.TableName == targetTable
+                ? String.Empty
+                : targetTable;
+
+            if (!featureValues.Any(fv => fv.SettingName == setting.Name))
+            {
+                Console.WriteLine($"{proposedSettingName} => {proposedTableName}");
+            }
+
+            var proposedParentSettingName = (selectedFeature.TableInfo.TableName == targetTable, parentSettingIsWildcard) switch
+            {
+                (false, _) => String.Empty,
+                (true, false) => selectedFeature.ParentSettingName,
+                (true, true) => String.Empty
+            };
+
+            var proposedValue = new ProposedFeatureValue
+            {
+                ParentSettingName = proposedParentSettingName,
+                OriginalSettingName = setting.Name,
+                SettingName = proposedSettingName,
+                Value = setting.Value,
+                TableName = proposedTableName,
+                ExistsInFeature = featureValues.Any(fv => fv.SettingName == proposedSettingName),
+                NotRecommended = SettingTreeNode.GroupSettingPrefixes.Contains(firstPart) && !firstPartIsSameAsParent
+            };
+
+            proposedValue.BackgroundColor = proposedValue switch
+            {
+                var pv when pv.ExistsInFeature => "bg-success",
+                var pv when pv.NotRecommended => "bg-warning",
+                _ => "white"
+            };
+
+            proposedValues.Add(proposedValue);
+
+
+        }
+
+        return proposedValues;
+    }
+
+    private class ProposedFeatureValue
+    {
+        public string OriginalSettingName { get; set; } = string.Empty;
+        public string ParentSettingName { get; set; } = string.Empty;
+        public string SettingName { get; set; } = string.Empty;
+        public string? Value { get; set; } = string.Empty;
+        public string TableName { get; set; } = string.Empty;
+        public bool ExistsInFeature { get; set; } = false;
+        public bool NotRecommended { get; set; } = false;
+        public string BackgroundColor { get; set; } = string.Empty;
+    }
+}

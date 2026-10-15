@@ -1,0 +1,115 @@
+@page "/wiki"
+@rendermode InteractiveServer
+@inject IWikiService WikiService
+@inject NavigationManager NavigationManager
+@inject ToastService ToastService
+
+<PageTitle>Wiki</PageTitle>
+
+<ConfirmDialog @ref="deleteConfirmDialog" />
+
+<div class="container py-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1 class="mb-0">Wiki</h1>
+        <Button Color="ButtonColor.Primary" @onclick="OnNewPage">
+            <Icon Name="IconName.Plus" class="me-1"></Icon>New Page
+        </Button>
+    </div>
+
+    @if (isLoading)
+    {
+        <p class="text-muted">⏳ Loading wiki pages...</p>
+    }
+    else if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <div class="alert alert-danger" role="alert">@errorMessage</div>
+    }
+    else if (!pages.Any())
+    {
+        <div class="text-center py-5">
+            <p class="text-muted">No wiki pages yet. Click "New Page" to create the first one.</p>
+        </div>
+    }
+    else
+    {
+        <ul class="list-group">
+            @foreach (var wikiPage in pages)
+            {
+                <li class="list-group-item d-flex justify-content-between align-items-center wiki-row"
+                    @onclick="() => OpenPage(wikiPage.Id)" style="cursor: pointer;">
+                    <div>
+                        <div class="fw-semibold">@wikiPage.Title</div>
+                        <small class="text-muted">Last updated: @wikiPage.LastUpdated.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</small>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-danger"
+                            @onclick="() => OnDeleteClick(wikiPage)" @onclick:stopPropagation @onclick:preventDefault>
+                        <Icon Name="IconName.Trash" />
+                    </button>
+                </li>
+            }
+        </ul>
+    }
+</div>
+
+<style>
+    .wiki-row:hover {
+        background-color: #f8f9fa;
+    }
+</style>
+
+@code {
+    private IEnumerable<WikiPage> pages = Enumerable.Empty<WikiPage>();
+    private bool isLoading = true;
+    private string? errorMessage;
+    private ConfirmDialog? deleteConfirmDialog;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        isLoading = true;
+        errorMessage = null;
+        try
+        {
+            pages = await WikiService.GetAllAsync();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error loading wiki pages: {ex.Message}";
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private void OpenPage(int id) => NavigationManager.NavigateTo($"/wiki/{id}");
+
+    private void OnNewPage() => NavigationManager.NavigateTo("/wiki/new");
+
+    private async Task OnDeleteClick(WikiPage page)
+    {
+        if (deleteConfirmDialog is null)
+            return;
+
+        var confirmed = await deleteConfirmDialog.ShowAsync(
+            "Confirm Delete",
+            $"Are you sure you want to delete wiki page '{page.Title}'?");
+
+        if (!confirmed)
+        {
+            ShowMessage(ToastType.Info, "Delete cancelled.");
+            return;
+        }
+
+        var (success, message) = await WikiService.DeleteAsync(page.Id);
+        ShowMessage(success ? ToastType.Success : ToastType.Danger, message);
+        if (success)
+            await LoadAsync();
+    }
+
+    private void ShowMessage(ToastType toastType, string message) => ToastService.Notify(new ToastMessage(toastType, message));
+}

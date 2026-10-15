@@ -1,0 +1,157 @@
+@page "/workers/{ClientName}"
+@rendermode InteractiveServer
+@inject NavigationManager NavigationManager
+@inject IWorkerService WorkerService
+@inject ToastService ToastService
+
+<h3>Workers for @ClientName</h3>
+
+<Modal @ref="workerModal" />
+<ConfirmDialog @ref="deleteConfirmDialog" />
+
+<div class="mb-3">
+    <Button Color="ButtonColor.Primary" @onclick="OnAddWorker" class="me-2">
+        <Icon Name="IconName.Plus" class="me-1"></Icon>Add Worker
+    </Button>
+    <Button Color="ButtonColor.Secondary" @onclick="ReloadGrid">Reload</Button>
+</div>
+
+<Grid TItem="WorkerProperty"
+      @ref="workersGrid"
+      AllowFiltering="false"
+      AllowPaging="false"
+      AllowSorting="false"
+      AllowSelection="false"
+      AllowRowClick="true"
+      OnRowClick="OnRowClick"
+      Class="table table-hover table-bordered table-striped"
+      DataProvider="WorkersDataProvider"
+      Responsive="true"
+      RowKeySelector="(w) => w.WorkerCode">
+
+    <GridColumns>
+        <GridColumn TItem="WorkerProperty" HeaderText="Worker Code" PropertyName="WorkerCode">
+            @context.WorkerCode
+        </GridColumn>
+        <GridColumn TItem="WorkerProperty" HeaderText="Primary Stock" PropertyName="PrimaryStock">
+            @context.PrimaryStock
+        </GridColumn>
+        <GridColumn TItem="WorkerProperty" HeaderText="Stocks" PropertyName="Stocks">
+            @context.Stocks
+        </GridColumn>
+        <GridColumn TItem="WorkerProperty" HeaderText="Process Tag" PropertyName="ProcessTag">
+            @context.ProcessTag
+        </GridColumn>
+        <GridColumn TItem="WorkerProperty" HeaderText="Process Names" PropertyName="ProcessNames">
+            <div style="max-width: 400px; white-space: normal; word-break: break-word;">
+                @context.ProcessNames
+            </div>
+        </GridColumn>
+        <GridColumn TItem="WorkerProperty" HeaderText="Primary Department" PropertyName="PrimaryDepartment">
+            @context.PrimaryDepartment
+        </GridColumn>
+        <GridColumn TItem="WorkerProperty" HeaderText="Process Group" PropertyName="ProcessGroup">
+            @context.ProcessGroup
+        </GridColumn>
+        <GridColumn TItem="WorkerProperty" HeaderText="Actions">
+            <button type="button" class="btn btn-sm btn-primary me-1"
+                    @onclick="@(() => OnEditClick(context))" @onclick:stopPropagation @onclick:preventDefault>
+                <Icon Name="IconName.Pencil" />
+            </button>
+            <button type="button" class="btn btn-sm btn-danger"
+                    @onclick="@(() => OnDeleteClick(context))" @onclick:stopPropagation @onclick:preventDefault>
+                <Icon Name="IconName.Trash" />
+            </button>
+        </GridColumn>
+    </GridColumns>
+</Grid>
+
+@code {
+    [Parameter]
+    public string ClientName { get; set; } = string.Empty;
+
+    private IEnumerable<WorkerProperty> workers = Enumerable.Empty<WorkerProperty>();
+    private Grid<WorkerProperty>? workersGrid;
+    private Modal? workerModal;
+    private ConfirmDialog? deleteConfirmDialog;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await base.OnParametersSetAsync();
+        if (workersGrid is not null)
+        {
+            await workersGrid.RefreshDataAsync();
+        }
+    }
+
+    private async Task<GridDataProviderResult<WorkerProperty>> WorkersDataProvider(GridDataProviderRequest<WorkerProperty> request)
+    {
+        workers = await WorkerService.GetAllAsync(new ClientInfo(ClientName));
+        return await Task.FromResult(request.ApplyTo(workers));
+    }
+
+    private Task ReloadGrid() => workersGrid?.RefreshDataAsync() ?? Task.CompletedTask;
+
+    private Task OnRowClick(GridRowEventArgs<WorkerProperty> args) => OpenForm(args.Item.WorkerCode);
+
+    private Task OnEditClick(WorkerProperty worker) => OpenForm(worker.WorkerCode);
+
+    private Task OnAddWorker() => OpenForm(null);
+
+    private async Task OpenForm(string? workerCode)
+    {
+        if (workerModal is null)
+            return;
+
+        var parameters = new Dictionary<string, object>
+        {
+            ["ClientName"] = ClientName,
+            ["WorkerCode"] = workerCode ?? string.Empty,
+            ["OnSaved"] = EventCallback.Factory.Create<EventArgs>(this, ShowSavedMessage),
+            ["OnCancelled"] = EventCallback.Factory.Create<EventArgs>(this, ShowCancelledMessage)
+        };
+
+        var title = string.IsNullOrEmpty(workerCode) ? "Add Worker" : "Edit Worker";
+        await workerModal.ShowAsync<WorkerPropertyForm>(title: title, parameters: parameters);
+    }
+
+    private async Task OnDeleteClick(WorkerProperty worker)
+    {
+        if (deleteConfirmDialog is null)
+            return;
+
+        var confirmed = await deleteConfirmDialog.ShowAsync(
+            "Confirm Delete",
+            $"Are you sure you want to delete worker '{worker.WorkerCode}'?");
+
+        if (!confirmed)
+        {
+            ShowMessage(ToastType.Info, "Delete cancelled.");
+            return;
+        }
+
+        var (success, message) = await WorkerService.DeleteAsync(new ClientInfo(ClientName), worker.WorkerCode);
+        ShowMessage(success ? ToastType.Success : ToastType.Danger, message);
+        if (success)
+            await ReloadGrid();
+    }
+
+    private async Task ShowSavedMessage(EventArgs e)
+    {
+        if (workerModal is null)
+            return;
+        await workerModal.HideAsync();
+        await ReloadGrid();
+        ShowMessage(ToastType.Success, "Worker saved successfully.");
+    }
+
+    private async Task ShowCancelledMessage(EventArgs e)
+    {
+        if (workerModal is null)
+            return;
+        await workerModal.HideAsync();
+        ShowMessage(ToastType.Info, "Worker editing cancelled.");
+    }
+
+    private void ShowMessage(ToastType toastType, string message) => ToastService.Notify(new ToastMessage(toastType, message));
+}

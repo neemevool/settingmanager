@@ -1,0 +1,84 @@
+﻿@inject ISchedulerService SchedulerService
+@inject ToastService ToastService
+
+@if (schedulerDCObject is null)
+{
+    <p><em>Loading...</em></p>
+}
+else
+{
+    <div class="mb-3">
+        <h2>@schedulerDCObject.Objectname</h2>
+    </div>
+    <EditForm Model="schedulerDCObject" OnValidSubmit="OnSave">
+        <DataAnnotationsValidator />
+        <ValidationSummary />
+        <div class="mb-3">
+            Updated: @schedulerDCObject.Updated
+        </div>
+        <div class="mb-3">
+            Starttime: @schedulerDCObject.Starttime
+        </div>
+        <div class="mb-3">
+            Endtime: @schedulerDCObject.Endtime
+        </div>
+        <div class="mb-3">
+            Fullsync: @schedulerDCObject.Fullsync
+        </div>
+        
+        <div class="mb-3 form-check">
+            <label for="setupdatedback" class="form-label">Set Updated Back (Days)</label>
+            <InputNumber id="setupdatedback" class="form-control" @bind-Value="setUpdatedBackTo" />
+            
+        </div>
+        <Button Color="ButtonColor.Primary" Type="ButtonType.Submit">Save</Button>
+        <Button Color="ButtonColor.Secondary" Type="ButtonType.Button" class="ms-2" @onclick="OnCancel">Cancel</Button>
+    </EditForm>
+}
+
+
+@code {
+    private DCObjects? schedulerDCObject;
+    private int? setUpdatedBackTo = null;
+
+    [Parameter] public string ClientName { get; set; } = string.Empty;
+    [Parameter] public string DCObjectName { get; set; } = string.Empty;
+    [Parameter] public EventCallback<EventArgs> OnSaved { get; set; }
+    [Parameter] public EventCallback<EventArgs> OnCancelled { get; set; }
+
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await base.OnParametersSetAsync();
+        schedulerDCObject = await SchedulerService.GetDCObjectByName(new ClientInfo(ClientName), DCObjectName);
+
+        
+    }
+
+
+    private async Task OnSave()
+    {
+        if (schedulerDCObject is not null && setUpdatedBackTo.HasValue)
+        {
+            var (success, message) = await SchedulerService.ResetDCObject(new ClientInfo(ClientName), schedulerDCObject.Objectname, setUpdatedBackTo);
+
+            if (success)
+            {
+                ToastService.Notify(new ToastMessage(ToastType.Success, $"DC Object '{schedulerDCObject.Objectname}' updated successfully."));
+                await OnSaved.InvokeAsync(EventArgs.Empty);
+            }
+            else
+            {
+                ToastService.Notify(new ToastMessage(ToastType.Danger, message));
+            }
+        }
+    }
+
+    private async Task OnCancel()
+    {
+        if (OnCancelled.HasDelegate)
+            await OnCancelled.InvokeAsync();
+    }
+
+    private void ShowMessage(ToastType toastType, string message) => ToastService.Notify(new ToastMessage(toastType, message));
+}

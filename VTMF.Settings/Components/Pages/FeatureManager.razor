@@ -1,0 +1,104 @@
+﻿@page "/featuremanager/{ClientName}/{ProcessTypeName}"
+@rendermode InteractiveServer
+@inject ISettingsService SettingsService
+@inject ISettingsMetadataService SettingMetaService
+@inject IFeatureService FeatureService
+@inject ToastService ToastService
+
+<PageTitle>Feature Management</PageTitle>
+<div class="container-fluid py-4">
+
+    @if (isLoading)
+    {
+        <div class="d-flex justify-content-center align-items-center py-5">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="ms-3 text-muted fs-5">Loading...</p>
+        </div>
+    }
+    else
+    {
+        @if (!string.IsNullOrEmpty(errorMessage))
+        {
+            <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                @errorMessage
+                <button type="button" class="btn-close" @onclick="@(() => errorMessage = null)"></button>
+            </div>
+        }
+
+        @if (featureGroups != null && featureGroups.Any())
+        {
+            <div class="card">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0">Available Features</h5>
+                </div>
+                <Accordion id="featureAccordion" class="accordion-flush" OnShowing="@LoadFeatureSettings">
+                    @foreach (var feature in featureGroups)
+                    {
+                        var featureId = $"feature-{feature.GroupName?.Replace(" ", "-")}";
+                        var isApplied = featureStates.TryGetValue(feature.GroupName ?? "", out var state) && state == FeatureState.Applied;
+                        var isPending = featureStates.TryGetValue(feature.GroupName ?? "", out var pendingState) && pendingState == FeatureState.Pending;
+
+                        <AccordionItem Name="@feature.GroupName">
+                            <TitleTemplate>
+                                
+                                    <div class="d-flex align-items-center gap-2 flex-grow-1">
+                                        @if (isApplied)
+                                        {
+                                            <span class="badge bg-success">
+                                                <i class="bi bi-check-circle"></i> Applied
+                                            </span>
+                                        }
+                                        else if (isPending)
+                                        {
+                                            <span class="badge bg-warning">
+                                                <i class="bi bi-hourglass-split"></i> Pending
+                                            </span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge bg-secondary">
+                                                <i class="bi bi-circle"></i> Available
+                                            </span>
+                                        }
+                                        <span class="fw-semibold">
+                                        @(string.IsNullOrEmpty(feature.Label) ? feature.GroupName : feature.Label)
+                                        </span>
+                                    </div>
+                                
+                            </TitleTemplate>
+                            <Content>
+                            
+                                    <p class="mb-3 text-muted">
+                                        @feature.Description
+                                    </p>
+
+                                    @foreach (var featurePrompt in featurePrompts.Where(fp => fp.Key == feature.GroupName).SelectMany(fp => fp.Value).Where(fv => fv.PromptOnApply == true))
+                                    {
+                                        <div class="mb-3">
+                                            <label class="form-label">@featurePrompt.SettingName</label>
+                                            <input type="text" class="form-control" @bind="@featurePrompt.SettingValue" />
+                                        </div>
+                                    }
+                                    <button class="btn btn-primary btn-sm" @onclick="@(async () => await ApplyFeature(feature))">
+                                        <i class="bi bi-arrow-repeat me-2"></i>Apply Feature
+                                    </button>
+                            
+                            
+                            </Content>
+                        </AccordionItem>
+                    }
+                </Accordion>
+            </div>
+
+        }
+        else
+        {
+            <div class="alert alert-info">
+                <i class="bi bi-info-circle me-2"></i>
+                No features available for this process type.
+            </div>
+        }
+    }
+</div> 

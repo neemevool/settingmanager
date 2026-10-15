@@ -1,0 +1,159 @@
+@inject IWorkerService WorkerService
+@inject ToastService ToastService
+
+@if (worker is null)
+{
+    <p><em>Loading...</em></p>
+}
+else
+{
+    <EditForm Model="worker" OnValidSubmit="OnSave">
+        <DataAnnotationsValidator />
+        <ValidationSummary />
+
+        @if (!string.IsNullOrEmpty(validationMessage))
+        {
+            <div class="alert alert-danger" role="alert">
+                @validationMessage
+            </div>
+        }
+
+        <div class="mb-3">
+            <label for="workerCode" class="form-label">Worker Code</label>
+            <InputText id="workerCode" class="form-control" @bind-Value="worker.WorkerCode" disabled="@isEditMode" />
+        </div>
+        <div class="mb-3">
+            <label for="primaryStock" class="form-label">Primary Stock</label>
+            <CsvMultiSelect Id="primaryStock"
+                            Options="stockOptions"
+                            SingleSelect="true"
+                            Placeholder="Select primary stock..."
+                            @bind-Value="worker.PrimaryStock" />
+        </div>
+        <div class="mb-3">
+            <label for="stocks" class="form-label">Stocks</label>
+            <CsvMultiSelect Id="stocks"
+                            Options="stockOptions"
+                            Placeholder="Select stocks..."
+                            @bind-Value="worker.Stocks" />
+        </div>
+        <div class="mb-3">
+            <label for="processTag" class="form-label">Process Tag</label>
+            <InputText id="processTag" class="form-control" @bind-Value="worker.ProcessTag" />
+        </div>
+        <div class="mb-3">
+            <label for="processNames" class="form-label">Process Names</label>
+            <CsvMultiSelect Id="processNames"
+                            Options="processNameOptions"
+                            Placeholder="Select process names..."
+                            @bind-Value="worker.ProcessNames" />
+        </div>
+        <div class="mb-3">
+            <label for="primaryDepartment" class="form-label">Primary Department</label>
+            <InputText id="primaryDepartment" class="form-control" @bind-Value="worker.PrimaryDepartment" />
+        </div>
+        <div class="mb-3">
+            <label for="processGroup" class="form-label">Process Group</label>
+            <InputText id="processGroup" class="form-control" @bind-Value="worker.ProcessGroup" />
+        </div>
+
+        <Button class="mt-3" Color="ButtonColor.Primary" Type="ButtonType.Submit">
+            Save
+        </Button>
+        <Button class="mt-3 ms-2" Color="ButtonColor.Secondary" Type="ButtonType.Button" @onclick="OnCancel">
+            Cancel
+        </Button>
+    </EditForm>
+}
+
+@code {
+    private WorkerProperty? worker;
+    private string validationMessage = string.Empty;
+    private bool isEditMode;
+    private IEnumerable<SelectOption> stockOptions = Enumerable.Empty<SelectOption>();
+    private IEnumerable<SelectOption> processNameOptions = Enumerable.Empty<SelectOption>();
+
+    [Parameter] public string ClientName { get; set; } = string.Empty;
+    [Parameter] public string WorkerCode { get; set; } = string.Empty;
+    [Parameter] public EventCallback<EventArgs> OnSaved { get; set; }
+    [Parameter] public EventCallback<EventArgs> OnCancelled { get; set; }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await base.OnParametersSetAsync();
+
+        isEditMode = !string.IsNullOrEmpty(WorkerCode);
+
+        var client = new ClientInfo(ClientName);
+        stockOptions = await WorkerService.GetStockOptionsAsync(client);
+        processNameOptions = await WorkerService.GetProcessNameOptionsAsync(client);
+
+        if (isEditMode)
+        {
+            worker = await WorkerService.GetByWorkerCodeAsync(client, WorkerCode);
+            if (worker is null)
+            {
+                validationMessage = $"Worker '{WorkerCode}' not found.";
+                worker = new WorkerProperty();
+            }
+        }
+        else
+        {
+            worker = new WorkerProperty();
+        }
+    }
+
+    private async Task OnSave()
+    {
+        if (worker is null)
+            return;
+
+        validationMessage = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(worker.WorkerCode))
+        {
+            validationMessage = "Worker code is required.";
+            ShowMessage(ToastType.Danger, validationMessage);
+            return;
+        }
+
+        var (stocksOk, stocksError) = WorkerService.ValidateStocksCsv(worker.Stocks);
+        if (!stocksOk)
+        {
+            validationMessage = stocksError ?? "Invalid stocks value.";
+            ShowMessage(ToastType.Danger, validationMessage);
+            return;
+        }
+
+        var (processOk, processError) = WorkerService.ValidateProcessNamesCsv(worker.ProcessNames);
+        if (!processOk)
+        {
+            validationMessage = processError ?? "Invalid process names value.";
+            ShowMessage(ToastType.Danger, validationMessage);
+            return;
+        }
+
+        var client = new ClientInfo(ClientName);
+        var (success, message) = isEditMode
+            ? await WorkerService.UpdateAsync(client, worker)
+            : await WorkerService.CreateAsync(client, worker);
+
+        if (!success)
+        {
+            validationMessage = message;
+            ShowMessage(ToastType.Danger, message);
+            return;
+        }
+
+        if (OnSaved.HasDelegate)
+            await OnSaved.InvokeAsync();
+    }
+
+    private async Task OnCancel()
+    {
+        if (OnCancelled.HasDelegate)
+            await OnCancelled.InvokeAsync();
+    }
+
+    private void ShowMessage(ToastType toastType, string message) => ToastService.Notify(new ToastMessage(toastType, message));
+}

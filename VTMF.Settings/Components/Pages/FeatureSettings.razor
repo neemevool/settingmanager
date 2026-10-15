@@ -1,0 +1,425 @@
+﻿@page "/feature-settings"
+@inject IFeatureManagementService FeatureManagementService
+@inject NavigationManager NavigationManager
+@inject ToastService ToastService
+@rendermode InteractiveServer
+@using VTMF.Settings.Entities
+
+<h3>FeatureSettings</h3>
+<ConfirmDialog @ref="deleteConfirmDialog" />
+<Grid TItem="SettingFeature"
+      @ref="featureGrid"
+      AllowFiltering="false"
+      AllowPaging="false"
+      AllowSorting="true"
+      AllowRowClick="true"
+      AllowSelection="true"
+      OnRowClick="OnRowClick"
+      Class="table table-hover table-bordered table-striped"
+      DataProvider="SettingFeatureDataProvider"
+      PageSize="10"
+      Responsive="true"
+      SelectedItemsChanged="OnSelectedItemsChanged"
+      SelectionMode="GridSelectionMode.Single"
+      RowKeySelector="(setting) => setting.FeatureName">
+
+    <GridColumns>
+        <GridColumn TItem="SettingFeature" HeaderText="Name" PropertyName="FeatureName" SortKeySelector="item => item.FeatureName">
+            @context.FeatureName
+        </GridColumn>
+        <GridColumn TItem="SettingFeature" HeaderText="Label" PropertyName="Label" SortKeySelector="item => item.Label">
+            @context.Label
+        </GridColumn>
+        <GridColumn TItem="SettingFeature" HeaderText="Process" PropertyName="ProcessTypeName" SortKeySelector="item => item.ProcessTypeName">
+            @context.ProcessTypeName
+        </GridColumn>
+        <GridColumn TItem="SettingFeature" HeaderText="Parent" PropertyName="ParentSettingName" SortKeySelector="item => item.ParentSettingName">
+            @context.ParentSettingName
+        </GridColumn>
+        <GridColumn TItem="SettingFeature" HeaderText="Table" PropertyName="TableName" SortKeySelector="item => item.TableName">
+            @context.TableName
+        </GridColumn>
+        
+    </GridColumns>
+</Grid>
+
+
+
+@if (selectedFeature is null)
+{
+    <div class="mt-3">
+        <Button Type="ButtonType.Button" Color="ButtonColor.Primary" @onclick="ShowAddForm">
+            <Icon Name="IconName.Plus" class="me-1"></Icon>Add New Feature
+        </Button>
+    </div>
+} else
+{
+    <div class="mt-3">
+        <Button Type="ButtonType.Button" Color="ButtonColor.Danger" @onclick="DeleteFeature">
+            <Icon Name="IconName.Trash" class="me-1"></Icon>Delete Feature
+        </Button>
+    </div>
+}
+
+@if (showAddForm || showModifyForm)
+{
+    <div class="card mt-3">
+        <div class="card-header">
+            <h5>@(showModifyForm ? "Modify Feature" : "Add New Feature")</h5>
+        </div>
+        <div class="card-body">
+            <form @onsubmit="HandleFormSubmit">
+                <div class="mb-3">
+                    <Tooltip Title="Must be unique, lowercase, no spaces">
+                        <i class="bi bi-info-circle-fill"></i>
+                    </Tooltip>
+                    <label class="form-label">Feature Name</label>
+                    <input type="text" class="form-control" @bind="formFeature.FeatureName" disabled="@showModifyForm" required />
+                    @if (validationResult.HasError(nameof(SettingFeatureForm.FeatureName)))
+                    {
+                        <div class="invalid-feedback d-block">
+                            @validationResult.GetError(nameof(SettingFeatureForm.FeatureName))
+                        </div>
+                    }
+                </div>
+
+                <div class="mb-3">
+                    <Tooltip Title="Shown in the settings, short, descriptive">
+                        <i class="bi bi-info-circle-fill"></i>
+                    </Tooltip>
+                    <label class="form-label">Label</label>
+                    <input type="text" class="form-control" @bind="formFeature.Label" required />
+                    @if (validationResult.HasError(nameof(SettingFeatureForm.Label)))
+                    {
+                        <div class="invalid-feedback d-block">
+                            @validationResult.GetError(nameof(SettingFeatureForm.Label))
+                        </div>
+                    }
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Description</label>
+                    <textarea class="form-control" @bind="formFeature.Description" rows="4" placeholder="Markdown text supported"></textarea>
+                </div>
+
+                <div class="mb-3">
+                    <Tooltip Title="Process type, where settings are applied">
+                        <i class="bi bi-info-circle-fill"></i>
+                    </Tooltip>
+                    <label class="form-label">Process Type Name</label>
+                    <select class="form-select" @bind="formFeature.ProcessTypeName" required>
+                        <option value="">-- Select --</option>
+                        <option value="TaskDocument">TaskDocument</option>
+                        <option value="RelocateItems">RelocateItems</option>
+                    </select>
+                    @if (validationResult.HasError(nameof(SettingFeatureForm.ProcessTypeName)))
+                    {
+                        <div class="invalid-feedback d-block">
+                            @validationResult.GetError(nameof(SettingFeatureForm.ProcessTypeName))
+                        </div>
+                    }
+                </div>
+
+                <div class="mb-3">
+                    <Tooltip Title="Table, where the feature is SHOWN">
+                        <i class="bi bi-info-circle-fill"></i>
+                    </Tooltip>
+                    <label class="form-label">Table Name</label>
+                    <select class="form-select" @bind="formFeature.TableName" required>
+                        <option value="">-- Select --</option>
+                        <option value="ProcessSettings">ProcessSettings</option>
+                        <option value="DocumentListLayout">DocumentListLayout</option>
+                        <option value="DocumentItemsListLayout">DocumentItemsListLayout</option>
+                        <option value="ServerProcessSettings">ServerProcessSettings</option>
+                        <option value="SearchCardLayout">SearchCardLayout</option>
+                        <option value="UpdateItemInfo">UpdateItemInfo</option>
+                        <option value="ItemListLayout">ItemListLayout</option>
+                        <option value="LocationCardLayout">LocationCardLayout</option>
+                        <option value="ArticleCardLayout">ArticleCardLayout</option>
+                        <option value="ILPEListLayoutInfo">ILPEListLayoutInfo</option>
+                    </select>
+                    @if (validationResult.HasError(nameof(SettingFeatureForm.TableName)))
+                    {
+                        <div class="invalid-feedback d-block">
+                            @validationResult.GetError(nameof(SettingFeatureForm.TableName))
+                        </div>
+                    }
+                </div>
+
+                <div class="mb-3">
+                    <Tooltip Title="Table, where the feature is SHOWN">
+                        <i class="bi bi-info-circle-fill"></i>
+                    </Tooltip>
+                    <label class="form-label">Parent Setting Name</label>
+                    <input type="text" class="form-control" @bind="formFeature.ParentSettingName" required/>
+                    @if (validationResult.HasError(nameof(SettingFeatureForm.ParentSettingName)))
+                    {
+                        <div class="invalid-feedback d-block">
+                            @validationResult.GetError(nameof(SettingFeatureForm.ParentSettingName))
+                        </div>
+                    }
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Feature Type</label>
+                    <select class="form-select" @bind:set="OnFeatureTypeChanged" @bind:get="formFeature.FeatureType" required>
+                        <option value="">-- Select --</option>
+                        <option value="SettingGroup">SettingGroup (columns, details, etc.)</option>
+                        <option value="SettingUpdate">SettingUpdate</option>
+                        <option value="SettingMove">SettingMove</option>
+                    </select>
+                    @if (validationResult.HasError(nameof(SettingFeatureForm.FeatureType)))
+                    {
+                        <div class="invalid-feedback d-block">
+                            @validationResult.GetError(nameof(SettingFeatureForm.FeatureType))
+                        </div>
+                    }
+                </div>
+
+                @if (!string.IsNullOrEmpty(selectedFeatureTypeDescription))
+                {
+                    <div class="mb-3">
+                        <div class="alert alert-info">
+                            @selectedFeatureTypeDescription
+                        </div>
+                    </div>
+                }
+
+                <div class="d-flex gap-2">
+                    <button type="submit" class="btn btn-primary">Save</button>
+                    <button type="button" class="btn btn-secondary" @onclick="CancelForm">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+}
+
+@code {
+    private IEnumerable<SettingFeature> features = Enumerable.Empty<SettingFeature>();
+    private HashSet<SettingFeature> selectedFeatures = new();
+    private Grid<SettingFeature>? featureGrid;
+    private SettingFeature? selectedFeature;
+    private SettingFeatureForm formFeature = new();
+    private bool showAddForm = false;
+    private bool showModifyForm = false;
+    private bool reloadGrid = false;
+    private string selectedFeatureTypeDescription = string.Empty;
+    private FormValidationResult validationResult = new();
+    private ConfirmDialog deleteConfirmDialog = null!;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await base.OnParametersSetAsync();
+        if (featureGrid is not null)
+        {
+            await featureGrid.RefreshDataAsync();
+        }
+    }
+
+
+
+
+    private async Task<GridDataProviderResult<SettingFeature>> SettingFeatureDataProvider(GridDataProviderRequest<SettingFeature> request)
+    {
+        if (!features.Any() || reloadGrid) // pull features only one time for client-side filtering, sorting, and paging
+        {
+            features = await FeatureManagementService.GetFeatures();
+            reloadGrid = false;
+        }
+        return await Task.FromResult(request.ApplyTo(features));
+    }
+
+    private void OnFeatureTypeChanged(string? selectedType)
+    {
+        formFeature.FeatureType = selectedType ?? string.Empty;
+        selectedFeatureTypeDescription = selectedType switch
+        {
+            "SettingGroup" => "Typically columns",
+            "SettingReplace" => "Warning! All current settings under the parent wille be DELETED!",
+            "SettingUpdate" => "Most common, settings will be added, but existing not changed",
+            "SettingConfigure" => "Not currently implemented, dont use",
+            "SettingMove" => "Settings will be moved up",
+            _ => string.Empty,
+        };
+    }
+
+    private Task OnSelectedItemsChanged(HashSet<SettingFeature> items)
+    {
+        selectedFeatures = items is not null && items.Any() ? items : new();
+        if (selectedFeatures.Count == 1)
+        {
+            formFeature = SettingFeatureForm.FromSettingFeature(selectedFeatures.First());
+            selectedFeature = selectedFeatures.First();
+            showModifyForm = true;
+        }
+        else
+        {
+            selectedFeature = null;
+            showModifyForm = false;
+        }
+        return Task.CompletedTask;
+    }
+
+    private void OnRowClick(GridRowEventArgs<SettingFeature> args)
+    {
+        selectedFeature = args.Item;
+        NavigateToValues();
+    }
+
+    private async Task DeleteFeature()
+    {
+        if (selectedFeature == null) return;
+        var confirmation = await deleteConfirmDialog.ShowAsync(
+            title: "Want to delete?",
+            message1: "Delete: " + selectedFeature.FeatureName ?? string.Empty,
+            message2: "Do you want to proceed?");
+        var (success, message) = await FeatureManagementService.DeleteFeature(selectedFeature.FeatureName);
+        if (success)
+        {
+            ToastService.ShowSuccess(message);
+            reloadGrid = true;
+
+            await featureGrid!.RefreshDataAsync();
+        }
+        else
+        {
+            ToastService.ShowError(message);
+        }
+        selectedFeature = null;
+
+        StateHasChanged();
+    }
+
+    private void ShowAddForm()
+    {
+        selectedFeature = null;
+        validationResult.ClearErrors();
+        showAddForm = true;
+        showModifyForm = false;
+        formFeature = new();
+
+    }
+
+    private void ShowModifyForm()
+    {
+        if (selectedFeature == null) return;
+        validationResult.ClearErrors();
+        showModifyForm = true;
+        showAddForm = false;
+        formFeature = SettingFeatureForm.FromSettingFeature(selectedFeature);
+
+    }
+
+    private void CancelForm()
+    {
+        showAddForm = false;
+        showModifyForm = false;
+        formFeature = new();
+        selectedFeature = null;
+    }
+
+    private void CancelSelection()
+    {
+        selectedFeature = null;
+    }
+
+    private void NavigateToValues()
+    {
+        if (selectedFeature != null)
+        {
+            NavigationManager.NavigateTo($"/feature-setting-values/{selectedFeature.FeatureName}");
+        }
+    }
+
+    private async Task HandleFormSubmit()
+    {
+
+        validationResult.ClearErrors();
+
+
+
+        // Validate required fields
+        if (string.IsNullOrWhiteSpace(formFeature.FeatureName))
+        {
+            validationResult.AddError(nameof(SettingFeatureForm.FeatureName), "Feature Name is required.");
+
+        } 
+        if (! validationResult.HasError(nameof(SettingFeatureForm.FeatureName)) && formFeature.FeatureName.ToLowerInvariant().Replace(" ", "") != formFeature.FeatureName)
+        {
+            validationResult.AddError(nameof(SettingFeatureForm.FeatureName), "Must be lowercase, without spaces");
+        }
+        if (!validationResult.HasError(nameof(SettingFeatureForm.FeatureName)))
+        {
+            if (selectedFeature != null && formFeature.FeatureName != selectedFeature.FeatureName)
+            {
+                validationResult.AddError(nameof(SettingFeatureForm.FeatureName), "Cannot change Feature Name when modifying existing feature.");
+            }
+            if (selectedFeature == null)
+            {
+                var featureExists = await FeatureManagementService.FeatureExists(formFeature.FeatureName);
+                if (featureExists)
+                {
+                    validationResult.AddError(nameof(SettingFeatureForm.FeatureName), "Feature Name must be unique.");
+                }
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(formFeature.Label))
+        {
+            validationResult.AddError(nameof(SettingFeatureForm.Label), "Label is required.");
+            
+        }
+
+        if (string.IsNullOrWhiteSpace(formFeature.ProcessTypeName))
+        {
+            validationResult.AddError(nameof(SettingFeatureForm.ProcessTypeName), "Process Type Name is required.");
+            
+        }
+
+        if (string.IsNullOrWhiteSpace(formFeature.TableName))
+        {
+            validationResult.AddError(nameof(SettingFeatureForm.TableName), "Table Name is required.");
+            
+        }
+
+        if (string.IsNullOrWhiteSpace(formFeature.FeatureType))
+        {
+            validationResult.AddError(nameof(SettingFeatureForm.FeatureType), "Feature Type is required.");
+            
+        }
+
+        if (!validationResult.IsValid)
+        {
+            StateHasChanged();
+            return;
+        }
+
+        var settingFeature = formFeature.ToSettingFeature();
+        
+        (bool success, string message) result;
+
+        if (showAddForm)
+        {
+            result = await FeatureManagementService.AddNewFeature(settingFeature);
+        }
+        else
+        {
+            result = await FeatureManagementService.UpdateFeature(settingFeature);
+        }
+
+        if (result.success)
+        {
+            // Refresh the grid after successful operation
+            
+            features = Enumerable.Empty<SettingFeature>();
+            CancelForm();
+            CancelSelection();
+            
+            if (featureGrid != null)
+            {
+                await featureGrid.RefreshDataAsync();
+                
+            }
+        }
+    }
+}

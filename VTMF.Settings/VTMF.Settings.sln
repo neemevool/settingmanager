@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.2.11415.280
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VTMF.Settings", "VTMF.Settings.csproj", "{E2B41371-AFF8-4F03-AF94-880F60FD2B75}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VTMF.SQLInstaller", "..\VTMF.SQLInstaller\VTMF.SQLInstaller.csproj", "{BB7CE85F-1240-D335-62FD-762ABD0008B9}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{E2B41371-AFF8-4F03-AF94-880F60FD2B75}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E2B41371-AFF8-4F03-AF94-880F60FD2B75}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E2B41371-AFF8-4F03-AF94-880F60FD2B75}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E2B41371-AFF8-4F03-AF94-880F60FD2B75}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BB7CE85F-1240-D335-62FD-762ABD0008B9}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BB7CE85F-1240-D335-62FD-762ABD0008B9}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BB7CE85F-1240-D335-62FD-762ABD0008B9}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BB7CE85F-1240-D335-62FD-762ABD0008B9}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {C6C4E585-72D2-43C3-B144-F6C6DE36E5C3}
+	EndGlobalSection
+EndGlobal

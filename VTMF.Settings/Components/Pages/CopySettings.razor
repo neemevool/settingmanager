@@ -1,0 +1,143 @@
+﻿@page "/copysettings/{ClientName}/{ProcessId:int}"
+@rendermode InteractiveServer
+@using VTMF.Settings.Services
+@inject ISettingsService SettingsService
+@inject SqlConnectionProvider SqlConnectionProvider
+@inject NavigationManager NavigationManager
+@inject ToastService ToastService
+
+<div class="container py-4">
+    <div class="card shadow-sm">
+        <div class="card-header bg-primary text-white">
+            <h3 class="mb-0">Copy Settings</h3>
+        </div>
+        <div class="card-body">
+            <div class="row mb-4">
+                <div class="col-md-6">
+                    <p><strong>Target Client:</strong> <span class="badge bg-info">@ClientName</span></p>
+                </div>
+                <div class="col-md-6">
+                    <p><strong>Process Type:</strong> <span class="badge bg-info">@selectedProcessType?.Name</span></p>
+                </div>
+            </div>
+
+            @if (!string.IsNullOrEmpty(errorMessage))
+            {
+                <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                    @errorMessage
+                    <button type="button" class="btn-close" @onclick="() => errorMessage = null"></button>
+                </div>
+            }
+
+            <div class="mb-4">
+                <label for="sourceClient" class="form-label fw-bold">Select Source Client:</label>
+                @if (isLoadingClients)
+                {
+                    <div class="spinner-border spinner-border-sm" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                }
+                else if (availableClients.Count == 0)
+                {
+                    <div class="alert alert-info">No other clients available to copy from.</div>
+                }
+                else
+                {
+                    <select id="sourceClient" class="form-select" @onchange="e => OnSourceClientChanged(e.Value?.ToString() ?? string.Empty)">
+                        <option value="">-- Select a source client --</option>
+                        @foreach (var client in availableClients)
+                        {
+                            <option value="@client">@client</option>
+                        }
+                    </select>
+                    <select id="sourceTable" class="form-select" @onchange="e => OnSourceProcessChanged(e.Value?.ToString() ?? string.Empty)">
+                        <option value="">-- Select a source table --</option>
+                        @foreach (var processTypeName in allProcessTypeNames)
+                        {
+                            <option value="@processTypeName">@processTypeName</option>
+                        }
+                    </select>
+                }
+            </div>
+
+            @if (!string.IsNullOrEmpty(selectedSourceClient))
+            {
+                <div class="mb-4">
+                    <label class="form-label fw-bold">Select Store Tables to Copy:</label>
+
+                    @if (isLoadingTables)
+                    {
+                        <div class="spinner-border spinner-border-sm" role="status">
+                            <span class="visually-hidden">Loading tables...</span>
+                        </div>
+                    }
+                    else if (availableStoreTables.Count == 0)
+                    {
+                        <div class="alert alert-info">No store tables available.</div>
+                    }
+                    else
+                    {
+                        <div class="card border-light mb-3">
+                            <div class="card-body">
+                                <!-- Select All Checkbox -->
+                                <div class="form-check mb-3">
+                                    <input class="form-check-input" type="checkbox" id="selectAll"
+                                           checked="@selectAllTables"
+                                           @onchange="OnSelectAllChanged" />
+                                    <label class="form-check-label fw-bold" for="selectAll">
+                                        Select All
+                                    </label>
+                                </div>
+
+                                <div class="border-top pt-3">
+                                    <!-- Individual Table Checkboxes -->
+                                    @foreach (var table in availableStoreTables)
+                                    {
+                                        <div class="form-check mb-2">
+                                            <input class="form-check-input" type="checkbox" id="table_@table"
+                                                   checked="@(selectedTables.ContainsKey(table) && selectedTables[table])"
+                                                   @onchange="e => OnTableCheckboxChanged(table, e)" />
+                                            <label class="form-check-label" for="table_@table">
+                                                @table
+                                            </label>
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Progress Section -->
+                        @if (isCopying)
+                        {
+                            <div class="mb-4">
+                                <p class="text-muted mb-2">
+                                    <strong>Copying table:</strong> @currentCopyingTable
+                                </p>
+                                <Progress>
+                                    <ProgressBar @bind-Width="@currentProgress"/>
+                                </Progress>
+                                <p class="text-muted small mt-2">
+                                    Progress: @currentProgress%
+                                </p>
+                            </div>
+                        }
+
+                        <div class="d-flex gap-2">
+                            <button type="button" class="btn btn-primary" @onclick="OnCopySettings">
+                                <i class="bi bi-files"></i> Copy Settings
+                            </button>
+                            <button type="button" class="btn btn-secondary" @onclick="OnCancel">
+                                Cancel
+                            </button>
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+
+
+
+

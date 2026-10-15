@@ -1,0 +1,391 @@
+﻿@page "/feature-setting-values/{FeatureName}"
+@inject IFeatureManagementService FeatureManagementService
+@inject NavigationManager NavigationManager
+@inject ToastService ToastService
+@rendermode InteractiveServer
+@using VTMF.Settings.Entities
+
+<h3>@FeatureName : @featureTableName</h3>
+<Modal @ref="featureValueModal" />
+<ConfirmDialog @ref="deleteConfirmDialog" />
+<Grid TItem="SettingFeatureValue"
+      @ref="featureValueGrid"
+      AllowFiltering="false"
+      AllowPaging="false"
+      AllowSorting="false"
+      OnRowClick="OnRowClick"
+      AllowRowClick="false"
+      AllowSelection="true"
+      SelectedItemsChanged="OnSelectedItemsChanged"
+      SelectionMode="GridSelectionMode.Multiple"
+      Class="table table-hover table-bordered table-striped"
+      DataProvider="SettingFeatureValueDataProvider"
+      PageSize="10"
+      Responsive="true"
+      RowKeySelector="(setting) => setting.SettingName">
+
+    <GridColumns>
+        <GridColumn TItem="SettingFeatureValue" HeaderText="Parent" PropertyName="ParentSettingName">
+            @context.ParentSettingName
+        </GridColumn>
+        <GridColumn TItem="SettingFeatureValue" HeaderText="Name" PropertyName="SettingName">
+            @context.SettingName
+        </GridColumn>
+        <GridColumn TItem="SettingFeatureValue" HeaderText="Type" PropertyName="SettingValueType">
+            @context.SettingValueType
+        </GridColumn>
+        <GridColumn TItem="SettingFeatureValue" HeaderText="Value" PropertyName="SettingValue">
+            <div @onclick:stopPropagation="true">
+                <TextInput @bind-Value:get="context.SettingValue" @bind-Value:set="(newValue) => SaveFeatureValue(context, newValue)" class="form-control" />
+            </div>
+        </GridColumn>
+        <GridColumn TItem="SettingFeatureValue" HeaderText="Prompt" PropertyName="PromptOnApply">
+            <div @onclick:stopPropagation="true">
+                <CheckboxInput @bind-Value:get="context.PromptOnApply" @bind-Value:set="(newValue) => SaveFeaturePromptOnApplyValue(context, newValue)" class="form-control" />
+            </div>
+        </GridColumn>
+        <GridColumn TItem="SettingFeatureValue" HeaderText="Table" PropertyName="StoreTable">
+            @context.StoreTable
+        </GridColumn>
+    </GridColumns>
+</Grid>
+
+
+<div class="mt-3">
+    @if (!selectedFeatureValues.Any())
+    {
+        <Button Type="ButtonType.Button" Color="ButtonColor.Primary" @onclick="ShowAddForm">
+            <Icon Name="IconName.Plus" class="me-1"></Icon>Add One Setting Value
+        </Button>
+        <Button Type="ButtonType.Button" Color="ButtonColor.Primary" @onclick="AddMultipleValues">
+            <Icon Name="IconName.Plus" class="me-1"></Icon>Add Multiple Setting Values
+        </Button>
+    }
+    else
+    {
+        <Button Type="ButtonType.Button" Color="ButtonColor.Danger" @onclick="DeleteFeatureValues">
+            <Icon Name="IconName.Crop" class="me-1"></Icon>Delete Selected
+        </Button>
+    }
+</div>
+
+
+
+
+@if (showAddForm)
+{
+    <div class="card mt-3">
+        <div class="card-header">
+            <h5>Add New Setting Value</h5>
+        </div>
+        <div class="card-body">
+            <form @onsubmit="HandleAddNewValue">
+                <div class="mb-3">
+                    <label class="form-label">Feature Name</label>
+                    <input type="text" class="form-control" value="@FeatureName" disabled />
+                    
+                </div>
+
+                <div class="mb-3">
+                    <Tooltip Title="Choose ONLY if values must be added to OTHER table">
+                        <i class="bi bi-info-circle-fill"></i>
+                    </Tooltip>
+                    <label class="form-label">Table Name</label>
+                    <select class="form-select" @bind="newFeatureValue.StoreTable">
+                        <option value="">-- Only if to another table! --</option>
+                        <option value="ProcessSettings">ProcessSettings</option>
+                        <option value="DocumentListLayout">DocumentListLayout</option>
+                        <option value="DocumentItemsListLayout">DocumentItemsListLayout</option>
+                        <option value="ServerProcessSettings">ServerProcessSettings</option>
+                        <option value="SearchCardLayout">SearchCardLayout</option>
+                        <option value="UpdateItemInfo">UpdateItemInfo</option>
+                        <option value="ItemListLayout">ItemListLayout</option>
+                        <option value="LocationCardLayout">LocationCardLayout</option>
+                    </select>
+                </div>
+
+                <div class="mb-3">
+                    <Tooltip Title="Setting will be added ONLY if this parent is found">
+                        <i class="bi bi-info-circle-fill"></i>
+                    </Tooltip>
+                    <label class="form-label">Parent Setting Name</label>
+                    <input type="text" class="form-control" @bind="newFeatureValue.ParentSettingName" />
+                </div>
+
+                <div class="mb-3">
+                    <Tooltip Title="If setting must be ALWAYS added, enter full name, otherwise only name">
+                        <i class="bi bi-info-circle-fill"></i>
+                    </Tooltip>
+                    <label class="form-label">Setting Name</label>
+                    <input type="text" class="form-control" @bind="newFeatureValue.SettingName" required />
+                    @if (validationResult.HasError(nameof(SettingFeatureValue.SettingName)))
+                    {
+                        <div class="invalid-feedback d-block">
+                            @validationResult.GetError(nameof(SettingFeatureValue.SettingName))
+                        </div>
+                    }
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Order</label>
+                    <input type="number" class="form-control" @bind="newFeatureValue.Order" required />
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Setting Value</label>
+                    <input type="text" class="form-control" @bind="newFeatureValue.SettingValue" />
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label">Setting Value Type</label>
+                    <select class="form-select" @bind="newFeatureValue.SettingValueType">
+                        <option value="@SettingValueType.String">String</option>
+                        <option value="@SettingValueType.Number">Number</option>
+                        <option value="@SettingValueType.Boolean">Boolean</option>
+                        <option value="@SettingValueType.List">List</option>
+                        <option value="@SettingValueType.Remove">Remove</option>
+                    </select>
+                </div>
+
+                <div class="mb-3 form-check">
+                    <input type="checkbox" class="form-check-input" id="promptOnApply" @bind="newFeatureValue.PromptOnApply" />
+                    <label class="form-check-label" for="promptOnApply">
+                        Prompt On Apply
+                    </label>
+                </div>
+
+                <div class="d-flex gap-2">
+                    <button type="submit" class="btn btn-primary">Save</button>
+                    <button type="button" class="btn btn-secondary" @onclick="CancelAddForm">Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+}
+
+@code {
+
+    private IEnumerable<SettingFeatureValue> featureValues = Enumerable.Empty<SettingFeatureValue>();
+    private Grid<SettingFeatureValue>? featureValueGrid;
+    private bool showAddForm = false;
+    private SettingFeatureValue newFeatureValue = new();
+    private Modal? featureValueModal;
+    private HashSet<SettingFeatureValue> selectedFeatureValues = new();
+    private EventCallback<EditContext>? onSavedCallback;
+    private EventCallback<MouseEventArgs>? onCancelRequestedCallback;
+    private ConfirmDialog? deleteConfirmDialog;
+    private bool reloadAll = false;
+    private string featureTableName = string.Empty;
+    private FormValidationResult validationResult = new();
+
+    [Parameter]
+    public string FeatureName { get; set; } = string.Empty;
+
+    protected override void OnInitialized()
+    {
+        onSavedCallback = new EventCallback<EditContext>(this, OnValidSubmit);
+        onCancelRequestedCallback = new EventCallback<MouseEventArgs>(this, ShowCancelledMessage);
+        base.OnInitialized();
+
+    }
+
+    public override async Task SetParametersAsync(ParameterView parameters)
+    {
+        await base.SetParametersAsync(parameters);
+        var feature = await FeatureManagementService.GetFeature(FeatureName);
+        if (feature is not null)
+        {
+            featureTableName = feature.TableName;
+        }
+        featureValues = Enumerable.Empty<SettingFeatureValue>();
+    }
+
+    private async Task<GridDataProviderResult<SettingFeatureValue>> SettingFeatureValueDataProvider(GridDataProviderRequest<SettingFeatureValue> request)
+    {
+        if (!featureValues.Any() || reloadAll) // pull features only one time for client-side filtering, sorting, and paging
+            featureValues = await FeatureManagementService.GetFeatureValues(FeatureName);
+
+        reloadAll = false;
+        return await Task.FromResult(request.ApplyTo(featureValues));
+    }
+
+    private Task OnSelectedItemsChanged(HashSet<SettingFeatureValue> featureValues)
+    {
+        selectedFeatureValues = featureValues is not null && featureValues.Any() ? featureValues : new();
+        return Task.CompletedTask;
+    }
+
+    private void ShowAddForm()
+    {
+        showAddForm = true;
+        var previousSetting = featureValues.OrderByDescending(fv => fv.Order).FirstOrDefault();
+        validationResult.ClearErrors();
+        newFeatureValue = new SettingFeatureValue
+        {
+            FeatureName = FeatureName,
+            Order = previousSetting != null ? previousSetting.Order + 1 : 1,
+            ParentSettingName = previousSetting?.ParentSettingName ?? string.Empty,
+            SettingName = SuggestSettingName(),
+            StoreTable = previousSetting?.StoreTable ?? string.Empty,
+        };
+
+    }
+
+    private void AddMultipleValues()
+    {
+        NavigationManager.NavigateTo($"/select-feature-setting-values/{FeatureName}");
+    }
+
+    private async Task DeleteFeatureValues()
+    {
+        if (!selectedFeatureValues.Any() || deleteConfirmDialog == null)
+            return;
+        var confirmation = await deleteConfirmDialog.ShowAsync(
+            title: "Want to delete?",
+            message1: "Delete:" + selectedFeatureValues.Count + " selected setting value(s)?",
+            message2: "Do you want to proceed?");
+        if (!confirmation)
+        {
+            return;
+        }
+        bool anyFailed = false;
+        foreach (var featureValue in selectedFeatureValues)
+        {
+            var (success, message) = await FeatureManagementService.DeleteFeatureValue(featureValue.FeatureName, featureValue.SettingName);
+            anyFailed = anyFailed || !success;
+        }
+        ToastService.Notify(new ToastMessage(anyFailed ? ToastType.Danger : ToastType.Success,
+            anyFailed ? "Some setting values could not be deleted." : "Selected setting values deleted successfully."));
+        selectedFeatureValues.Clear();
+        // Refresh the grid
+        if (featureValueGrid != null)
+        {
+            reloadAll = true;
+            await featureValueGrid.RefreshDataAsync();
+        }
+    }
+
+    private string SuggestSettingName()
+    {
+        var previousSetting = featureValues.OrderByDescending(fv => fv.Order).FirstOrDefault();
+        if (previousSetting != null)
+        {
+            if (previousSetting.SettingName.Contains("{{settingname}}"))
+            {
+                var (prefix, value) = SettingTreeNode.SplitPathToTwo(previousSetting.SettingName);
+                return prefix + ".";
+            }
+        }
+        return string.Empty;
+    }
+    private void CancelAddForm()
+    {
+        showAddForm = false;
+        newFeatureValue = new();
+
+    }
+
+    private async Task HandleAddNewValue()
+    {
+
+        validationResult.ClearErrors();
+        // Validate required fields
+        if (string.IsNullOrWhiteSpace(newFeatureValue.SettingName))
+        {
+            validationResult.AddError(nameof(SettingFeatureValue.SettingName), "Setting Name is required.");
+
+        }
+
+        if (!validationResult.HasError(nameof(SettingFeatureValue.SettingName)) && newFeatureValue.SettingName.Replace(" ", "") != newFeatureValue.SettingName)
+        {
+            validationResult.AddError(nameof(SettingFeatureValue.SettingName), "Must be without spaces");
+        }
+
+        if (newFeatureValue.Order < 0)
+        {
+            validationResult.AddError(nameof(SettingFeatureValue.Order), "Order must be a non-negative number.");
+
+        }
+
+
+
+        if (!validationResult.IsValid)
+        {
+            StateHasChanged();
+            return;
+        }
+
+        // Add the feature value
+        var (success, message) = await FeatureManagementService.AddNewFeatureValue(newFeatureValue);
+
+        if (success)
+        {
+            // Add the new feature value to the local list
+            var valuesList = featureValues.ToList();
+            valuesList.Add(newFeatureValue);
+            featureValues = valuesList.OrderBy(x => x.Order).ToList();
+
+            // Reset form and hide after successful save
+
+            CancelAddForm();
+
+            // Refresh the grid
+            if (featureValueGrid != null)
+            {
+                featureValues = Enumerable.Empty<SettingFeatureValue>();
+                await featureValueGrid.RefreshDataAsync();
+
+            }
+        }
+    }
+
+    private async Task SaveFeatureValue(SettingFeatureValue context, string? newValue)
+    {
+        if (context.SettingValue == newValue)
+            return; // No change
+        context.SettingValue = newValue;
+        var (success, message) = await FeatureManagementService.UpdateFeatureValue(context);
+        ToastService.Notify(new ToastMessage(success ? ToastType.Success : ToastType.Danger, message));
+        // Add logic to save the updated feature value, e.g., call a service method
+    }
+
+    private async Task SaveFeaturePromptOnApplyValue(SettingFeatureValue context, bool newValue)
+    {
+        if (context.PromptOnApply == newValue)
+            return; // No change
+        context.PromptOnApply = newValue;
+        var (success, message) = await FeatureManagementService.UpdateFeatureValue(context);
+        ToastService.Notify(new ToastMessage(success ? ToastType.Success : ToastType.Danger, message));
+    }
+
+    private async Task OnRowClick(GridRowEventArgs<SettingFeatureValue> args)
+    {
+
+        if (featureValueModal is null)
+            return;
+        var selectedFeatureValue = args.Item;
+        var parameters = new Dictionary<string, object>();
+        parameters.Add("FeatureValue", args.Item);
+        parameters.Add("OnValidSubmit", onSavedCallback ?? default);
+        parameters.Add("OnCancelRequested", onCancelRequestedCallback ?? default);
+        await featureValueModal.ShowAsync<FeatureSettingValueForm>(title: "Feature Setting Value", parameters: parameters);
+    }
+
+    private async Task OnValidSubmit(EditContext e)
+    {
+        if (featureValueModal is null)
+            return;
+        _ = featureValueModal.HideAsync();
+
+
+    }
+    private Task ShowCancelledMessage(MouseEventArgs e)
+    {
+        if (featureValueModal is null)
+            return Task.CompletedTask;
+        _ = featureValueModal.HideAsync();
+        return Task.CompletedTask;
+    }
+}
+
+

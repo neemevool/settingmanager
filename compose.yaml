@@ -1,0 +1,17 @@
+services:
+  vtmf-settings:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    env_file: settings.env
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+    volumes:
+      - .VTMF.Settings/appsettings.json:/app/appsettings.json
+      - .VTMF.Settings/appsettings.Development.json:/app/appsettings.Development.json
+      - data-protection-keys:/app/keys
+
+volumes:
+  data-protection-keys:

@@ -1,0 +1,51 @@
+﻿@page "/features"
+@rendermode InteractiveServer
+@inject NavigationManager NavigationManager
+
+<PageTitle>Features Manager</PageTitle>
+
+<div class="container py-5">
+    <h1 class="mb-4">Features Manager</h1>
+    <p class="lead">Manage and configure application features.</p>
+    <div class="row g-4">
+        <div class="col-lg-4 col-md-6 col-sm-12">
+            <div class="card h-100 shadow-sm border-0 cursor-pointer"
+                 @onclick="() => NavigateToFeatureSettings()"
+                 style="cursor: pointer; transition: all 0.3s ease;">
+                <div class="card-body text-center d-flex flex-column align-items-center">
+                    <div class="fs-1 mb-3">⚙</div>
+                    <h5 class="card-title fw-bold mb-2">Manage feature settings</h5>
+                    <p class="card-text text-muted small mb-3">Manage single features</p>
+                    <small class="text-primary fw-medium">Manage →</small>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-4 col-md-6 col-sm-12">
+            <div class="card h-100 shadow-sm border-0 cursor-pointer"
+                 @onclick="() => NavigateToFeatureGroups()"
+                 style="cursor: pointer; transition: all 0.3s ease;">
+                <div class="card-body text-center d-flex flex-column align-items-center">
+                    <div class="fs-1 mb-3">🧰</div>
+                    <h5 class="card-title fw-bold mb-2">Feature groups</h5>
+                    <p class="card-text text-muted small mb-3">Manage feature groups</p>
+                    <small class="text-primary fw-medium">Manage →</small>
+                </div>
+            </div>
+        </div>
+        
+        
+    </div>
+</div>
+
+@code {
+        private void NavigateToFeatureGroups()
+        {
+            NavigationManager.NavigateTo("/feature-groups");
+        }
+
+        private void NavigateToFeatureSettings()
+        {
+            NavigationManager.NavigateTo("/feature-settings");
+        }
+}

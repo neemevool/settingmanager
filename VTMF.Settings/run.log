@@ -1,0 +1,11 @@
+Using launch settings from C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings\Properties\launchSettings.json...
+Building...
+C:\Program Files\dotnet\sdk\10.0.203\Microsoft.Common.CurrentVersion.targets(2451,5): warning MSB3270: There was a mismatch between the processor architecture of the project being built "MSIL" and the processor architecture of the reference "C:\Users\neeme\.nuget\packages\vtmf.sqlinstaller\1.0.12\lib\net9.0\VTMF.SQLInstaller.dll", "AMD64". This mismatch may cause runtime failures. Please consider changing the targeted processor architecture of your project through the Configuration Manager so as to align the processor architectures between your project and references, or take a dependency on references with a processor architecture that matches the targeted processor architecture of your project. [C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings\VTMF.Settings.csproj]
+info: Microsoft.Hosting.Lifetime[14]
+      Now listening on: http://localhost:5045
+info: Microsoft.Hosting.Lifetime[0]
+      Application started. Press Ctrl+C to shut down.
+info: Microsoft.Hosting.Lifetime[0]
+      Hosting environment: Development
+info: Microsoft.Hosting.Lifetime[0]
+      Content root path: C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings

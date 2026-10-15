@@ -1,0 +1,102 @@
+@page "/table-management/{ClientName}/{ProcessId:int}"
+
+@rendermode InteractiveServer
+@using VTMF.Settings.Entities
+@using VTMF.Settings.Services
+@using BlazorBootstrap
+
+@inject ISettingsService SettingsService
+@inject NavigationManager NavigationManager
+@inject ToastService ToastService
+
+<PageTitle>@ClientName : Table Management</PageTitle>
+
+<div class="container-fluid py-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h1 class="mb-0 text-dark">
+            <a href="/process-types/@ClientName">@ClientName</a> : @selectedProcessType?.Name - Table Management
+        </h1>
+    </div>
+
+    @if (isLoading)
+    {
+        <div class="d-flex justify-content-center align-items-center py-5">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="ms-3 text-muted fs-5">Loading...</p>
+        </div>
+    }
+    else
+    {
+        @if (selectedProcessType != null)
+        {
+            @if (!selectedProcessType.IsDefaultEnvironment)
+            {
+                <div class="text-danger mb-3">@selectedProcessType.Environment</div>
+            }
+
+            <!-- Table Management Info -->
+            <div class="alert alert-secondary d-flex flex-wrap gap-4 mb-3" role="alert">
+                <span>Client: <strong class="text-dark">@ClientName</strong></span>
+                <span>Process: <strong class="text-dark">@selectedProcessType.Name</strong></span>
+            </div>
+
+            <!-- Navigation Button -->
+            <div class="mb-3">
+                <button class="btn btn-secondary" @onclick="BackToSettings">
+                    <i class="bi bi-arrow-left"></i> Back to settings
+                </button>
+            </div>
+
+            <!-- Existing Tables List -->
+            @if (storeTables.Any())
+            {
+                <div class="card mb-4">
+                    <div class="card-header bg-light">
+                        <h5 class="mb-0">Existing Tables</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="list-group">
+                            @foreach (var table in storeTables)
+                            {
+                                <div class="list-group-item">
+                                    <span class="badge bg-secondary">@table</span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+            }
+
+            <!-- Create New Table Form -->
+            <div class="card">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0">Create New Table</h5>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label for="tableSuffixInput" class="form-label fw-semibold">Table Name Suffix:</label>
+                        <p class="text-muted small mb-2">Full table name will be: <strong>@selectedProcessType?.Name<span style="color: #0d6efd;">@newTableSuffix</span></strong></p>
+                        <input type="text" class="form-control" id="tableSuffixInput"
+                               placeholder="e.g., DocumentListLayout"
+                               @bind="newTableSuffix"
+                               disabled="@isCreating" />
+                    </div>
+                    <button class="btn btn-primary" @onclick="CreateNewTable" disabled="@(isCreating || string.IsNullOrWhiteSpace(newTableSuffix))">
+                        @if (isCreating)
+                        {
+                            <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                            <span>Creating...</span>
+                        }
+                        else
+                        {
+                            <i class="bi bi-plus-lg"></i>
+                            <span>Create new table</span>
+                        }
+                    </button>
+                </div>
+            </div>
+        }
+    }
+</div>

@@ -1,0 +1,85 @@
+﻿<install>
+  <set name="initialdatabase">
+    <item name="init" check="file" isfolder="true" type="database" source="$/Sawmill/database5/init"/>
+    <item name="admins" check="database" isfolder="false" type="admin" source=""/>
+  </set>
+  
+  <set name="base">
+    <item name="settings" check="database" isfolder="true" type="database" source="$/Sawmill/database5/settings"/>
+    <item name="worker" check="database" isfolder="true" type="database" source="$/Sawmill/database5/worker"/>
+    <item name="utilities" check="database" isfolder="true" type="database" source="$/Sawmill/database5/utilities"/>
+    <item name="scheduler" check="database" isfolder="true" type="database" source="$/Sawmill/database5/scheduler"/>
+    <item name="maintenance" check="database" isfolder="true" type="database" source="$/Sawmill/database5/maintenance"/>
+  </set>
+
+  <set name="directocore">
+    <item name="module" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/directomodule"/>
+    <item name="elements" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/dcelements"/>
+    <item name="registries" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/dcelementsregistry"/>
+    <item name="users" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/dcusers"/>
+    <item name="shelfstocklevel" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/dcelementsshelfstocklevel"/>
+    <item name="order" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/dcelementsorder"/>
+    <item name="purchaseorderelements" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/dcelementspurchaseorder"/>
+    <item name="supplierdata" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/dcelementssupplier"/>
+    
+  </set>
+
+  <set name="services">
+    <item name="emailservice" check="database" isfolder="true" type="database" source="$/Sawmill/database5/emailservice"/>
+    <item name="pda_ws" check="database" isfolder="false" type="serviceaccount" source="">
+      <spec name="role" value="worker"/>
+      <spec name="role" value="emailservice"/>
+    </item>
+    <item name="pda_sch" check="database" isfolder="false" type="serviceaccount" source="">
+      <spec name="role" value="worker"/>
+      <spec name="role" value="emailservice"/>
+    </item>
+    
+    <item name="printservicecore" check="database" isfolder="true" type="database" source="$/Sawmill/database5/printservice"/>
+    <item name="pda_print" check="database" isfolder="false" type="serviceaccount" source="">
+      <spec name="role" value="printservice"/>
+    </item>
+  </set>
+
+  <set name="itemlists">
+    <item name="tblshelves" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/itemlists/shelves"/>
+  </set>
+
+  <set name="relocate">
+    <item name="relocatecore" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/process/sparelocateitems"/>
+    <item name="relocatebase" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/process/sparelocateitemsbase"/>
+    <item name="shelfcardbase" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/process/sparelocateitemsshelfbase"/>
+  </set>
+
+  <set name="stockmovement">
+    <item name="movements" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/process/spamovement"/>
+    <item name="movementbase" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/process/spamovementbase"/>
+  </set>
+
+  <set name="shelfmovement">
+    <item name="shelfmovementbase" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/process/spashelfmovementbase"/>
+  </set>
+
+  <set name="assembling">
+    <item name="assemblingcore" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/process/spaorderassembling"/>
+    <item name="assemblingbase" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/process/spaorderassemblingbase"/>
+  </set>
+
+  <set name="inventory">
+    <item name="inventoryelements" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/dcelementsinventory"/>
+    <item name="inventorycore" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/process/spainventory"/>
+    <item name="inventorybase" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/process/spainventorybase"/>
+    <item name="shelfinventory" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/process/spashelfinventory"/>
+  </set>
+
+  <set name="incomeorder">
+    <item name="incomeordercore" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/process/spaincomeorder"/>
+    <item name="incomeorderbase" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/process/spaincomeorderbase"/>
+  </set>
+
+  <set name="writeoff">
+    <item name="writeoffelements" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/dcelementswriteoff"/>
+    <item name="writeoffcore" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/process/spawriteoff"/>
+    <item name="writeoffbase" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/process/spawriteoffbase"/>
+  </set>
+</install>

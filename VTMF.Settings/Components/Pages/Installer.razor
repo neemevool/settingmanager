@@ -1,0 +1,414 @@
+﻿@page "/installer/{ClientName}"
+@using VTMF.SQLInstaller.Entities
+@using VTMF.Settings.Entities
+@rendermode InteractiveServer
+@inject NavigationManager NavigationManager
+@inject ISchedulerService SchedulerService
+@inject SqlConnectionProvider SqlConnectionProvider;
+@inject ILoggerFactory LoggerFactory;
+@inject ToastService ToastService
+
+
+<h3>Installer for @ClientName</h3>
+
+<Modal @ref="schedulerJobModal" />
+
+@if (installXml is not null)
+{
+    <div class="card mt-4">
+        <div class="card-header">
+            <h5 class="mb-0">Installation Details</h5>
+        </div>
+        <div class="card-body">
+            <p><strong>Installation XML Path:</strong> @installXmlPath</p>
+
+            @foreach (var setInfo in installXml.Sets.Select((set, index) => new { set, index }))
+            {
+                var setItems = setInfo.set.Items.Where(i => i.Type == "database").ToList();
+
+                <div class="form-check mb-3">
+                    <input 
+                        class="form-check-input" 
+                        type="checkbox" 
+                        id="set_@setInfo.index"
+                        checked="@IsSetSelected(setInfo.set)"
+                        @onchange="(ChangeEventArgs args) => OnInstallSetChanged(setInfo.set, args)"
+                    />
+                    <label class="form-check-label fw-bold" for="set_@setInfo.index">
+                        @setInfo.set.Name
+                    </label>
+                </div>
+
+                <div class="ms-4 mb-3">
+                    @foreach (var itemInfo in setItems.Select((item, index) => new { item, index }))
+                    {
+                        var itemId = $"item_{setInfo.index}_{itemInfo.index}";
+                        <div class="form-check">
+                            <input 
+                                class="form-check-input" 
+                                type="checkbox" 
+                                id="@itemId"
+                                checked="@IsItemSelected(setInfo.set, itemInfo.item)"
+                                @onchange="(ChangeEventArgs args) => OnInstallItemChanged(setInfo.set, itemInfo.item, args)"
+                            />
+                            <label class="form-check-label" for="@itemId">
+                                @itemInfo.item.ItemName
+                                @if (GetItemResults(setInfo.set, itemInfo.item) is { } itemResults)
+                                {
+                                    @GetItemStatusIcon(itemResults)
+                                }
+                            </label>
+                        </div>
+                        @if (showDetailed && GetItemResults(setInfo.set, itemInfo.item) is { } detailedResults)
+                        {
+                            <div class="ms-4 small text-muted">
+                                @foreach (var installedInfo in detailedResults.Select((installedItem, idx) => new { installedItem, idx }))
+                                {
+                                    var installedItem = installedInfo.installedItem;
+                                    <div>
+                                        @if (showSingles && installedItem.Status == InstallStatus.ShouldBeInstalled && !string.IsNullOrEmpty(installedItem.Source))
+                                        {
+                                            var singleFileName = System.IO.Path.GetFileName(installedItem.Source);
+                                            var singleId = $"single_{setInfo.index}_{itemInfo.index}_{installedInfo.idx}";
+                                            <input
+                                                class="form-check-input me-1"
+                                                type="checkbox"
+                                                id="@singleId"
+                                                checked="@IsSingleFileSelected(setInfo.set, itemInfo.item, singleFileName)"
+                                                @onchange="(ChangeEventArgs args) => OnSingleFileChanged(setInfo.set, itemInfo.item, singleFileName, args)"
+                                            />
+                                        }
+                                        @GetStatusIcon(installedItem.Status)
+                                        <span class="ms-1">@(installedItem.Source?.Replace(installConfig!.SqlScriptsDir, "")) : @(installedItem.Version)</span>
+                                        @if (installedItem.Status == InstallStatus.Failed && !string.IsNullOrEmpty(installedItem.ErrorMessage))
+                                        {
+                                            <span class="ms-2 text-danger">@installedItem.ErrorMessage</span>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        }
+                    }
+                </div>
+            }
+        </div>
+    </div>
+    <div class="form-check mt-3">
+        <input 
+            class="form-check-input" 
+            type="checkbox" 
+            id="detailedCheckbox"
+            checked="@showDetailed"
+            @onchange="OnDetailedChanged"
+        />
+        <label class="form-check-label" for="detailedCheckbox">
+            Detailed
+        </label>
+    </div>
+    <div class="form-check mt-3">
+        <input
+            class="form-check-input"
+            type="checkbox"
+            id="detailedSingleCheckbox"
+            checked="@showSingles"
+            @onchange="OnDetailedSingleChanged"
+        />
+        <label class="form-check-label" for="detailedSingleCheckbox">
+            Detailed, single
+        </label>
+    </div>
+    <div class="form-check mt-3">
+        <input class="form-check-input"
+               type="checkbox"
+               id="clearVersioncache"
+               checked="@clearVersioncache"
+               @onchange="OnClearVersionCacheChanged" />
+        <label class="form-check-label" for="clearVersioncache">
+            Clear version cache
+        </label>
+    </div>
+    @if (installXml.Sets != null) {
+        <button class="btn btn-primary mt-3" @onclick="() => Install(installXml.Sets.FirstOrDefault()!.Items.First(), false)">
+            Install Selected Items
+        </button>
+        <button class="btn btn-secondary mt-3" @onclick="() => Install(installXml.Sets.FirstOrDefault()!.Items.First(), true)">
+            Validate Selected Items
+        </button>
+    }
+}
+else
+{
+    <div class="alert alert-warning mt-4">
+        Installation XML not found for client '@ClientName'.
+    </div>
+}
+
+
+@code {
+    [Parameter]
+    public string ClientName { get; set; } = string.Empty;
+    private Modal? schedulerJobModal;
+    private string? installXmlPath;
+    private Install? installXml;
+    private readonly HashSet<string> selectedInstallItems = new(StringComparer.OrdinalIgnoreCase);
+    // Per-item (set + item scoped) set of single SQL file names selected for targeted installation.
+    private readonly Dictionary<string, HashSet<string>> selectedSingleFiles = new(StringComparer.OrdinalIgnoreCase);
+    private List<LogEntry> installLog = new();
+    private bool showDetailed;
+    private bool showSingles;
+    private bool clearVersioncache;
+    private bool versionCacheLoaded;
+    private readonly Dictionary<string, List<InstalledItem>> itemResults = new(StringComparer.OrdinalIgnoreCase);
+    private InstallConfig? installConfig;
+    private bool isInitialized;
+    private VTMF.SQLInstaller.Services.DatabaseService? databaseService;
+    private VTMF.SQLInstaller.Services.SqlScriptParser? sqlParser;
+    private VTMF.SQLInstaller.Installers.DatabaseInstaller? installer;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await base.OnParametersSetAsync();
+        clearVersioncache = false;
+        installXmlPath = SqlConnectionProvider.GetInstallXmlPath(ClientName);
+        installConfig = SqlConnectionProvider.GetInstallConfig(ClientName);
+        if (!string.IsNullOrEmpty(installXmlPath))
+        {
+            installXml = VTMF.SQLInstaller.Services.XmlInstallParser.Parse(installXmlPath);
+        }
+        if (!isInitialized)
+        {
+            var loggerFactory = new VTMF.Settings.Services.ListLoggerFactory(installLog);
+        
+            databaseService = new VTMF.SQLInstaller.Services.DatabaseService(
+                installConfig.ConnectionString,
+                loggerFactory.CreateLogger<VTMF.SQLInstaller.Services.DatabaseService>(),
+                installConfig);
+            sqlParser = new VTMF.SQLInstaller.Services.SqlScriptParser(
+                loggerFactory.CreateLogger<VTMF.SQLInstaller.Services.SqlScriptParser>());
+            installer = new VTMF.SQLInstaller.Installers.DatabaseInstaller(
+                databaseService,
+                sqlParser,
+                installConfig,
+                loggerFactory.CreateLogger<VTMF.SQLInstaller.Installers.DatabaseInstaller>());
+            isInitialized = true;
+        }    
+        
+    }
+
+    private async Task Install(InstallItem installItem, bool validate)
+    {
+        ArgumentNullException.ThrowIfNull(installXmlPath);
+        ArgumentNullException.ThrowIfNull(installXml);
+        ArgumentNullException.ThrowIfNull(installConfig);
+        ArgumentNullException.ThrowIfNull(databaseService);
+        ArgumentNullException.ThrowIfNull(sqlParser);
+        ArgumentNullException.ThrowIfNull(installer);
+
+        itemResults.Clear();
+        installLog.Clear();
+
+        var successUpdatedCache = await LoadVersionCache(installer);
+        
+        if (! successUpdatedCache)
+        {
+            ToastService.ShowError("Failed to update version cache. Installation cannot proceed");
+            return;
+        };
+
+        foreach (var installSet in installXml.Sets)
+        {
+            foreach (var item in installSet.Items.Where(i => i.Type == "database"))
+            {
+                if (IsItemSelected(installSet, item))
+                {
+                    item.Mode = validate ? InstallMode.Validate : InstallMode.Install;
+                    var itemKey = GetItemKey(installSet, item);
+
+                    // When single-file mode is active and specific files were selected for this
+                    // (set + item) scope, restrict the install to exactly those scripts.
+                    IEnumerable<InstalledItem> installedItems;
+                    if (showSingles
+                        && selectedSingleFiles.TryGetValue(itemKey, out var singleFiles)
+                        && singleFiles.Count > 0)
+                    {
+                        installedItems = await installer.InstallAsync(item, installSet.Name, singleFiles.ToList());
+                    }
+                    else
+                    {
+                        installedItems = await installer.InstallAsync(item, installSet.Name);
+                    }
+
+                    itemResults[itemKey] = installedItems.ToList();
+                }
+            }
+        }
+        
+    }
+
+    private async Task<bool> LoadVersionCache(VTMF.SQLInstaller.Installers.DatabaseInstaller installer)
+    {
+        if (versionCacheLoaded)
+        {
+            return true;
+        }
+        var result = await installer.InitializeVersionCache(SQLInstaller.Installers.DatabaseInstaller.VersionCacheSource.CsvFile);
+        if (!result)
+        {
+            return false;
+        }
+        versionCacheLoaded = true;
+        return true;
+    }
+
+    private static string GetItemKey(InstallSet installSet, InstallItem installItem)
+        => $"{installSet.Name}|{installItem.ItemName}";
+
+    private bool IsItemSelected(InstallSet installSet, InstallItem installItem)
+        => selectedInstallItems.Contains(GetItemKey(installSet, installItem));
+
+    private bool IsSetSelected(InstallSet installSet)
+    {
+        var setItems = installSet.Items.Where(i => i.Type == "database").ToList();
+        return setItems.Count > 0 && setItems.All(item => IsItemSelected(installSet, item));
+    }
+
+    private void OnInstallItemChanged(InstallSet installSet, InstallItem installItem, ChangeEventArgs args)
+    {
+        var isChecked = GetCheckboxValue(args);
+        var itemKey = GetItemKey(installSet, installItem);
+
+        if (isChecked)
+        {
+            selectedInstallItems.Add(itemKey);
+        }
+        else
+        {
+            selectedInstallItems.Remove(itemKey);
+        }
+    }
+
+    private void OnInstallSetChanged(InstallSet installSet, ChangeEventArgs args)
+    {
+        var isChecked = GetCheckboxValue(args);
+        var setItems = installSet.Items.Where(i => i.Type == "database");
+
+        foreach (var installItem in setItems)
+        {
+            var itemKey = GetItemKey(installSet, installItem);
+            if (isChecked)
+            {
+                selectedInstallItems.Add(itemKey);
+            }
+            else
+            {
+                selectedInstallItems.Remove(itemKey);
+            }
+        }
+    }
+
+    private static bool GetCheckboxValue(ChangeEventArgs args)
+    {
+        return args.Value switch
+        {
+            bool value => value,
+            string value when bool.TryParse(value, out var parsed) => parsed,
+            _ => false
+        };
+    }
+
+    private void OnDetailedChanged(ChangeEventArgs args)
+    {
+        showDetailed = GetCheckboxValue(args);
+    }
+
+    private void OnDetailedSingleChanged(ChangeEventArgs args)
+    {
+        var isChecked = GetCheckboxValue(args);
+        // Mirror OnDetailedChanged for the detailed view, and additionally toggle single-file mode.
+        showDetailed = isChecked;
+        showSingles = isChecked;
+    }
+
+    private bool IsSingleFileSelected(InstallSet installSet, InstallItem installItem, string fileName)
+    {
+        var itemKey = GetItemKey(installSet, installItem);
+        return selectedSingleFiles.TryGetValue(itemKey, out var files) && files.Contains(fileName);
+    }
+
+    private void OnSingleFileChanged(InstallSet installSet, InstallItem installItem, string fileName, ChangeEventArgs args)
+    {
+        var isChecked = GetCheckboxValue(args);
+        var itemKey = GetItemKey(installSet, installItem);
+
+        if (isChecked)
+        {
+            if (!selectedSingleFiles.TryGetValue(itemKey, out var files))
+            {
+                files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                selectedSingleFiles[itemKey] = files;
+            }
+            files.Add(fileName);
+        }
+        else if (selectedSingleFiles.TryGetValue(itemKey, out var files))
+        {
+            files.Remove(fileName);
+            if (files.Count == 0)
+            {
+                selectedSingleFiles.Remove(itemKey);
+            }
+        }
+    }
+
+    private void OnClearVersionCacheChanged(ChangeEventArgs args)
+    {
+        var clearVersionCache = GetCheckboxValue(args);
+        if (clearVersionCache)
+        {
+            versionCacheLoaded = false;
+        }
+    }
+
+    private List<InstalledItem>? GetItemResults(InstallSet installSet, InstallItem installItem)
+    {
+        var itemKey = GetItemKey(installSet, installItem);
+        return itemResults.TryGetValue(itemKey, out var results) ? results : null;
+    }
+
+    private static MarkupString GetItemStatusIcon(List<InstalledItem> results)
+    {
+        if (results.Count == 0)
+        {
+            return new MarkupString("");
+        }
+
+        if (results.Any(r => r.Status == InstallStatus.ShouldBeInstalled))
+        {
+            return new MarkupString("<i class=\"bi bi-exclamation-triangle-fill text-warning ms-2\"></i>");
+        }
+
+        if (results.Any(r => r.Status == InstallStatus.Failed))
+        {
+            return new MarkupString("<i class=\"bi bi-x-circle-fill text-danger ms-2\"></i>");
+        }
+
+        if (results.All(r => r.Status == InstallStatus.Skipped || r.Status == InstallStatus.Installed))
+        {
+            return new MarkupString("<i class=\"bi bi-check-circle-fill text-success ms-2\"></i>");
+        }
+
+        return new MarkupString("<i class=\"bi bi-circle text-secondary ms-2\"></i>");
+    }
+
+    private static MarkupString GetStatusIcon(InstallStatus status)
+    {
+        return status switch
+        {
+            InstallStatus.Installed => new MarkupString("<i class=\"bi bi-check-circle-fill text-success\"></i>"),
+            InstallStatus.Skipped => new MarkupString("<i class=\"bi bi-check-circle-fill text-success\"></i>"),
+            InstallStatus.ShouldBeInstalled => new MarkupString("<i class=\"bi bi-exclamation-triangle-fill text-warning\"></i>"),
+            InstallStatus.Failed => new MarkupString("<i class=\"bi bi-x-circle-fill text-danger\"></i>"),
+            InstallStatus.NotInstalled => new MarkupString("<i class=\"bi bi-circle text-secondary\"></i>"),
+            _ => new MarkupString("<i class=\"bi bi-question-circle text-secondary\"></i>")
+        };
+    }
+}

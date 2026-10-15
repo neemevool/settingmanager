@@ -1,0 +1,211 @@
+﻿@page "/feature-groups"
+@inject IFeatureManagementService FeatureManagementService
+@inject ISettingsService SettingsService
+@inject ISettingsMetadataService SettingMetaService
+@inject NavigationManager NavigationManager
+@inject ToastService ToastService
+@rendermode InteractiveServer
+@using VTMF.Settings.Entities
+
+<h3>FeatureGroups</h3>
+
+<ConfirmDialog @ref="deleteConfirmDialog" />
+<Grid TItem="SettingFeatureGroup" 
+    @ref="featureGroupsGrid"
+      Data="@featureGroups"
+      Class="table table-striped"
+      AllowSelection="true"
+      OnRowClick="OnRowClick"
+      AllowRowClick="true"
+      SelectedItemsChanged="OnSelectedItemsChanged"
+      SelectionMode="GridSelectionMode.Single"
+      RowKeySelector="@(item => item.GroupName)">
+    <GridColumns>
+        <GridColumn TItem="SettingFeatureGroup" PropertyName="@nameof(SettingFeatureGroup.GroupName)" HeaderText="Group Name" >
+            @context.GroupName
+        </GridColumn>
+        <GridColumn TItem="SettingFeatureGroup" PropertyName="@nameof(SettingFeatureGroup.Description)" HeaderText="Description" >
+            @context.Description
+        </GridColumn>
+    </GridColumns>
+</Grid>
+<div class="mt-3">
+    @if (selectedFeatureGroups.Any())
+    {
+        <Button Type="ButtonType.Button" Color="ButtonColor.Danger" @onclick="DeleteFeatureGroup">
+            <Icon Name="IconName.Crop" class="me-1"></Icon>Delete Selected
+        </Button>
+    } else
+    {
+        <Button Type="ButtonType.Button" Color="ButtonColor.Primary" @onclick="ShowAddForm">
+            <Icon Name="IconName.Plus" class="me-1"></Icon>Add Feature Group
+        </Button>
+    }
+</div>
+
+@if (showAddForm)
+{
+    <div class="card mt-4">
+        <div class="card-header">
+            <h5 class="mb-0">Add New Feature Group</h5>
+        </div>
+        <div class="card-body">
+            <form @onsubmit="HandleAddGroup">
+            
+                <div class="mb-3">
+                    <label for="groupName" class="form-label">Group Name</label>
+                    <InputText id="groupName" class="form-control" @bind-Value="newFeatureGroup!.GroupName" />
+                    @if (validationResult.HasError(nameof(SettingFeatureGroup.GroupName)))
+                    {
+                        <div class="invalid-feedback d-block">
+                            @validationResult.GetError(nameof(SettingFeatureGroup.GroupName))
+                        </div>
+                    }
+                </div>
+                <div class="mb-3">
+                    <label for="groupLabel" class="form-label">Group Label</label>
+                    <InputText id="groupLabel" class="form-control" @bind-Value="newFeatureGroup!.Label" />
+                    @if (validationResult.HasError(nameof(SettingFeatureGroup.Label)))
+                    {
+                        <div class="invalid-feedback d-block">
+                            @validationResult.GetError(nameof(SettingFeatureGroup.Label))
+                        </div>
+                    }
+                </div>
+                <div class="mb-3">
+                    <label for="processType" class="form-label">Process Type</label>
+                    <select id="processType" class="form-select" @bind="newFeatureGroup.ProcessTypeName">
+                        <option value="">Select Process Type</option>
+                        <option value="TaskDocument">TaskDocument</option>
+                        <option value="RelocateItems">RelocateItems</option>
+                    </select>
+                    @if (validationResult.HasError(nameof(SettingFeatureGroup.ProcessTypeName)))
+                    {
+                        <div class="invalid-feedback d-block">
+                            @validationResult.GetError(nameof(SettingFeatureGroup.ProcessTypeName))
+                        </div>
+                    }
+                </div>
+                <div class="mb-3">
+                    <label for="description" class="form-label">Description</label>
+                    <textarea id="description" class="form-control" @bind="newFeatureGroup.Description" rows="4" placeholder="Markdown text supported"></textarea>
+                </div>
+                <Button Type="ButtonType.Submit" Color="ButtonColor.Success">Add Feature Group</Button>
+                <Button Type="ButtonType.Button" Color="ButtonColor.Secondary" class="ms-2" @onclick="CancelAddForm">Cancel</Button>
+            </form>
+        </div>
+    </div>
+}
+
+
+@code {
+    private List<SettingFeatureGroup> featureGroups = new();
+    private Grid<SettingFeatureGroup>? featureGroupsGrid;
+    private ConfirmDialog? deleteConfirmDialog;
+    private HashSet<SettingFeatureGroup> selectedFeatureGroups = new();
+    private bool showAddForm = false;
+    private SettingFeatureGroup? newFeatureGroup = null;
+    private FormValidationResult validationResult = new();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        await base.OnAfterRenderAsync(firstRender);
+        if (!firstRender)
+            return;
+        var featureGroupsEnumeration = await FeatureManagementService.GetFeatureGroups();
+        featureGroups = featureGroupsEnumeration.ToList();
+        StateHasChanged();
+    }
+    private Task OnSelectedItemsChanged(HashSet<SettingFeatureGroup> featureGroups)
+    {
+        selectedFeatureGroups = featureGroups is not null && featureGroups.Any() ? featureGroups : new();
+        return Task.CompletedTask;
+    }
+    private Task OnRowClick(GridRowEventArgs<SettingFeatureGroup> args)
+    {
+        // Handle row click event if needed
+        return Task.CompletedTask;
+    }
+    private async Task DeleteFeatureGroup()
+    {
+        if (featureGroups.Any())
+        {
+            var deleteGroup = featureGroups.First();
+            bool confirmed = await deleteConfirmDialog!.ShowAsync("Confirm Delete", $"Are you sure you want to delete {deleteGroup.GroupName}?");
+            if (confirmed)
+            {
+                // Perform delete operation here
+                // Example: await FeatureManagementService.DeleteFeatureGroupsAsync(selectedFeatureValues);
+
+                var (success, errorMessage) = await FeatureManagementService.DeleteFeatureGroup(deleteGroup.GroupName);
+                selectedFeatureGroups.Clear();
+                featureGroups.Remove(deleteGroup);
+                await featureGroupsGrid!.RefreshDataAsync();
+                StateHasChanged();
+                ToastService.ShowSuccess($"{deleteGroup.GroupName} deleted successfully.");
+            }
+        }
+    }
+
+    private void ShowAddForm()
+    {
+        newFeatureGroup = new SettingFeatureGroup
+        {
+
+        };
+        showAddForm = true;
+        validationResult.ClearErrors();
+
+    }
+    private void CancelAddForm()
+    {
+        showAddForm = false;
+        newFeatureGroup = null;
+
+
+    }
+    private async Task HandleAddGroup()
+    {
+        if (newFeatureGroup is null)
+            return;
+        validationResult.ClearErrors();
+        if (string.IsNullOrWhiteSpace(newFeatureGroup.GroupName))
+        {
+            validationResult.AddError(nameof(SettingFeatureGroup.GroupName), "Group Name is required.");
+        }
+        if (string.IsNullOrWhiteSpace(newFeatureGroup.Label))
+        {
+            validationResult.AddError(nameof(SettingFeatureGroup.Label), "Label is required.");
+        }
+        if (string.IsNullOrWhiteSpace(newFeatureGroup.ProcessTypeName))
+        {
+            validationResult.AddError(nameof(SettingFeatureGroup.ProcessTypeName), "Process Type Name is required.");
+        }
+        var groupExists = await FeatureManagementService.FeatureGroupExists(newFeatureGroup.GroupName);
+        if (groupExists)
+        {
+            validationResult.AddError(nameof(SettingFeatureGroup.GroupName), "Group Name already exists.");
+        }
+
+        if (!validationResult.IsValid)
+        {
+            StateHasChanged();
+            return;
+        }
+        
+        var (success, message) = await FeatureManagementService.AddNewFeatureGroup(newFeatureGroup);
+        if (success)
+        {
+            showAddForm = false;
+            featureGroups.Add(newFeatureGroup);
+            newFeatureGroup = null;
+            await featureGroupsGrid!.RefreshDataAsync();
+            StateHasChanged();
+            ToastService.ShowSuccess("Feature group added successfully.");
+        }
+        else
+        {
+            ToastService.ShowError($"Failed to add feature group: {message}");
+        }
+    }
+}

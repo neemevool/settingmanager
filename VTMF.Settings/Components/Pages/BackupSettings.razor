@@ -1,0 +1,121 @@
+﻿@page "/backupsettings/{ClientName}/{ProcessId:int}"
+@rendermode InteractiveServer
+@using VTMF.Settings.Services
+@inject ISettingsService SettingsService
+@inject NavigationManager NavigationManager
+@inject ToastService ToastService
+
+<div class="container py-4">
+    <div class="card shadow-sm">
+        <div class="card-header bg-primary text-white">
+            <h3 class="mb-0">Backup and Restore Settings</h3>
+        </div>
+        <div class="card-body">
+            <div class="row mb-4">
+                <div class="col-md-6">
+                    <p><strong>Client:</strong> <span class="badge bg-info">@ClientName</span></p>
+                </div>
+                <div class="col-md-6">
+                    <p><strong>Process Type:</strong> <span class="badge bg-info">@selectedProcessType?.Name</span></p>
+                </div>
+            </div>
+
+            @if (!string.IsNullOrEmpty(errorMessage))
+            {
+                <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                    @errorMessage
+                    <button type="button" class="btn-close" @onclick="() => errorMessage = null"></button>
+                </div>
+            }
+
+
+            
+
+            <div class="mb-4">
+                <label class="form-label fw-bold">Select Store Tables to Copy:</label>
+
+                @if (isLoadingTables)
+                {
+                    <div class="spinner-border spinner-border-sm" role="status">
+                        <span class="visually-hidden">Loading tables...</span>
+                    </div>
+                }
+                else if (availableStoreTables.Count == 0)
+                {
+                    <div class="alert alert-info">No store tables available.</div>
+                }
+                else
+                {
+                    <div class="card border-light mb-3">
+                        <div class="card-body">
+                            <!-- Select All Checkbox -->
+                            <div class="form-check mb-3">
+                                <input class="form-check-input" type="checkbox" id="selectAll"
+                                       checked="@selectAllTables"
+                                       @onchange="OnSelectAllChanged" />
+                                <label class="form-check-label fw-bold" for="selectAll">
+                                    Select All
+                                </label>
+                            </div>
+
+                            <div class="border-top pt-3">
+                                <!-- Individual Table Checkboxes -->
+                                @foreach (var table in availableStoreTables)
+                                {
+                                    <div class="form-check mb-2">
+                                        <input class="form-check-input" type="checkbox" id="table_@table"
+                                               checked="@(selectedTables.ContainsKey(table) && selectedTables[table])"
+                                               @onchange="e => OnTableCheckboxChanged(table, e)" />
+                                        <label class="form-check-label" for="table_@table">
+                                            @table
+                                        </label>
+                                    </div>
+                                }
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="backupDescription" class="form-label">Backup Description (Optional):</label>
+                        <textarea class="form-control" id="backupDescription" 
+                                  placeholder="Enter a description for this backup"
+                                  rows="3" 
+                                  @bind="backupDescription"
+                                  maxlength="150"></textarea>
+                        <small class="form-text text-muted"></small>
+                    </div>
+
+                    <div class="d-flex gap-2">
+                        <button type="button" class="btn btn-primary" @onclick="BackupSelectedTables">
+                            <i class="bi bi-files"></i> Backup Settings
+                        </button>
+                        <button type="button" class="btn btn-secondary" @onclick="OnCancel">
+                            Cancel
+                        </button>
+                    </div>
+                }
+            </div>
+
+
+            <div class="mb-4">
+                <label class="form-label fw-bold">Select Tables to Restore:</label>
+                <div class="card border-light mb-3">
+                    <div class="card-body">
+                        @if (availableBackups.Count == 0)
+                        {
+                        <div class="alert alert-info">No backups available.</div>
+                        }
+                        else
+                        {
+                            @foreach (var backup in availableBackups)
+                            {
+                                <div class="form-check">@backup</div>
+                            }
+                        }
+
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

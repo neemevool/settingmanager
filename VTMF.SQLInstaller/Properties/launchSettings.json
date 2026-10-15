@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "VTMF.SQLInstaller": {
+      "commandName": "Project"
+    },
+    "Container (Dockerfile)": {
+      "commandName": "Docker"
+    }
+  }
+}

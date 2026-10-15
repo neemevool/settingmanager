@@ -1,0 +1,246 @@
+﻿@page "/scheduler/{ClientName}"
+@rendermode InteractiveServer
+@inject NavigationManager NavigationManager
+@inject ISchedulerService SchedulerService
+@inject ToastService ToastService
+
+<h3>Scheduler for @ClientName</h3>
+
+<Modal @ref="schedulerJobModal" />
+
+
+<div class="mb-3">
+    <Button Color="ButtonColor.Success" @onclick="OnEnableJobs" class="me-2">Enable</Button>
+    <Button Color="ButtonColor.Danger" @onclick="OnDisableJobs" class="me-2">Disable</Button>
+    <Button Color="ButtonColor.Primary" @onclick="OnRegenerateJobs">Regenerate</Button>
+    <Button Color="ButtonColor.Secondary" @onclick="ReloadGrid">Reload</Button>
+</div>
+
+    <Grid TItem="SchedulerJob"
+          @ref="@schedulerGrid"
+          AllowFiltering="false"
+          AllowPaging="false"
+          AllowSorting="false"
+          AllowSelection="true"
+      
+      AllowRowClick="true"
+      OnRowClick="OnRowClick"
+          Class="table table-hover table-bordered table-striped"
+          DataProvider="SchedulerJobDataProvider"
+          PageSize="5"
+          Responsive="true"
+          RowKeySelector="(job) => job.Name"
+          SelectedItemsChanged="OnSelectedItemsChanged"
+          SelectionMode="GridSelectionMode.Multiple">
+
+        <GridColumns>
+            <GridColumn TItem="SchedulerJob" HeaderText="Query" PropertyName="Query" SortKeySelector="item => item.Query">
+                @context.Query@( (context.Name is not null && context.Name.EndsWith("Full")) ? " Full" : "" )
+            </GridColumn>
+            <GridColumn TItem="SchedulerJob" HeaderText="Updated">
+            <div style="background-color:@GetLastUpdatedBackgroundColor(context); display:inline-block;">
+                <a @onclick:stopPropagation @onclick:preventDefault @onclick="@(() => OnLastUpdatedClick(context.Query))">@GetLastUpdated(context)</a>
+            </div>
+            </GridColumn>
+            <GridColumn TItem="SchedulerJob" HeaderText="Seconds" PropertyName="Seconds" SortKeySelector="item => item.Seconds">
+                @context.Seconds
+            </GridColumn>
+            <GridColumn TItem="SchedulerJob" HeaderText="Cron" PropertyName="Cron" SortKeySelector="item => item.Cron">
+                @context.Cron
+            </GridColumn>
+            <GridColumn TItem="SchedulerJob" HeaderText="Disabled" PropertyName="Disabled" SortKeySelector="item => item.Disabled">
+                <div style="background-color:@GetBackgroundColorForJob(context); padding:4px; display:inline-block;">
+                    <input type="checkbox" disabled checked="@context.Disabled" />
+                </div>
+            </GridColumn>
+            <GridColumn TItem="SchedulerJob" HeaderText="From Hours" PropertyName="FromHours" SortKeySelector="item => item.FromHours">
+                @context.FromHours
+            </GridColumn>
+            <GridColumn TItem="SchedulerJob" HeaderText="To Hours" PropertyName="ToHours" SortKeySelector="item => item.ToHours">
+                @context.ToHours
+            </GridColumn>
+        </GridColumns>
+
+
+        
+    </Grid>
+
+
+@code {
+    [Parameter]
+    public string ClientName { get; set; } = string.Empty;
+
+    private IEnumerable<SchedulerJob> schedulerJobs = Enumerable.Empty<SchedulerJob>();
+    private IEnumerable<DCObjects> dcObjects = Enumerable.Empty<DCObjects>();
+    private HashSet<SchedulerJob> selectedJobs = new();
+    private Grid<SchedulerJob>? schedulerGrid;
+    private SchedulerJob? selectedJob;
+    private Modal? schedulerJobModal;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await base.OnParametersSetAsync();
+        if (schedulerGrid is not null)
+        {
+            await schedulerGrid.RefreshDataAsync();
+        }
+    }
+
+    private async Task OnLastUpdatedClick(string jobName)
+    {
+        var dcObject = GetDCobject(jobName).FirstOrDefault();
+        if (dcObject is not null)
+        {
+            if (schedulerJobModal is null)
+                return;
+
+            var parameters = new Dictionary<string, object>();
+            parameters.Add("DCObjectName", dcObject.Objectname);
+            parameters.Add("ClientName", ClientName);
+            parameters.Add("OnSaved", EventCallback.Factory.Create<EventArgs>(this, ShowSavedMessage));
+            parameters.Add("OnCancelled", EventCallback.Factory.Create<EventArgs>(this, ShowCancelledMessage));
+            await schedulerJobModal.ShowAsync<SchedulerDCObjectsForm>(title: "DC Object", parameters: parameters);
+        }
+
+    }
+
+    private async Task<GridDataProviderResult<SchedulerJob>> SchedulerJobDataProvider(GridDataProviderRequest<SchedulerJob> request)
+    {
+        schedulerJobs = await SchedulerService.GetAllJobsAsync(new ClientInfo(ClientName)); // call a service or an API to pull the scheduler jobs
+        dcObjects = await SchedulerService.GetAllDCObjects(new ClientInfo(ClientName));
+
+        selectedJobs.Clear();
+        return await Task.FromResult(request.ApplyTo(schedulerJobs));
+    }
+
+    private string GetBackgroundColorForJob(SchedulerJob job)
+    {
+        return job.Disabled ? "lightpink" : "lightgreen";
+    }
+
+    private string GetLastUpdatedBackgroundColor(SchedulerJob job)
+    {
+        var dcObject = GetDCobject(job.Query).FirstOrDefault();
+        if (dcObject is null)
+            return "lightgray";
+        if (dcObject.Updated is null)
+            return "lightpink";
+        if (dcObject.Updated.Value <= DateTime.UtcNow.AddDays(-1))
+            return "lightpink";
+        return "lightgreen";
+    }
+
+    private string GetLastUpdated(SchedulerJob job)
+    {
+        var dcObject = GetDCobject(job.Query).FirstOrDefault();
+        if (dcObject is null || dcObject.Updated is null)
+            return "N/A";
+        return dcObject.Updated.Value.ToString("yyyy-MM-dd HH:mm:ss");
+    }
+
+    private IEnumerable<DCObjects> GetDCobject(string queryName)
+    {
+        var objectName = queryName.Replace("DC", "").ToLowerInvariant();
+        var correctedObjectName = objectName switch
+        {
+            "inventory" => "taking",
+            "items" => "item",
+            "customers" => "customer",
+            "objects" => "object",
+            "projects" => "project",
+            "stocks" => "stock",
+            "sndatafields" => "sndatafield",
+            "suppliers" => "supplier",
+
+            _ => objectName
+        };
+        
+        return dcObjects.Where(dc => dc.Objectname == correctedObjectName);
+    }
+
+    private Task OnSelectedItemsChanged(HashSet<SchedulerJob> jobs)
+    {
+        selectedJobs = jobs is not null && jobs.Any() ? jobs : new();
+        return Task.CompletedTask;
+    }
+
+    private async Task OnRowClick(GridRowEventArgs<SchedulerJob> args)
+    {
+        
+        if (schedulerJobModal is null)
+            return;
+        selectedJob = args.Item;
+        var parameters = new Dictionary<string, object>();
+        parameters.Add("SchedulerJobName", selectedJob.Name);
+        parameters.Add("ClientName", ClientName);
+        parameters.Add("OnSaved", EventCallback.Factory.Create<EventArgs>(this, ShowSavedMessage));
+        parameters.Add("OnCancelled", EventCallback.Factory.Create<EventArgs>(this, ShowCancelledMessage));
+        await schedulerJobModal.ShowAsync<SchedulerJobForm>(title: "Scheduler Job", parameters: parameters);
+    }
+
+    private async Task ShowSavedMessage(EventArgs e)
+    {
+        if (schedulerJobModal is null)
+            return;
+        await schedulerJobModal.HideAsync();
+        await ReloadGrid();
+        ShowMessage(ToastType.Success, "Job saved successfully.");
+    }
+    
+
+    private async Task ShowCancelledMessage(EventArgs e)
+    {
+        if (schedulerJobModal is null)
+            return;
+        await schedulerJobModal.HideAsync();
+        ShowMessage(ToastType.Info, "Job editing cancelled.");
+    }
+    
+
+    private string GetBackgroundColor(bool disabled) => disabled ? "lightpink" : "lightgreen";
+
+    private Task ReloadGrid() => schedulerGrid?.RefreshDataAsync() ?? Task.CompletedTask;
+
+    private async Task OnEnableJobs()
+    {
+        if (selectedJobs.Count == 0)
+        {
+            ShowMessage(ToastType.Warning, "Select at least one job to enable.");
+            return;
+        }
+        var jobNames = selectedJobs.Select(job => job.Name);
+        
+        var (success, message) = await SchedulerService.EnableJobsAsync(new ClientInfo(ClientName), jobNames);
+        ShowMessage(success ? ToastType.Success : ToastType.Danger, message);
+        selectedJobs.Clear();
+        await ReloadGrid();
+        return;
+    }
+
+    private async Task OnDisableJobs()
+    {
+        if (selectedJobs.Count == 0)
+        {
+            ShowMessage(ToastType.Warning, "Select at least one job to disable.");
+            return;
+        }
+        var jobNames = selectedJobs.Select(job => job.Name);
+        
+        var (success, message) = await SchedulerService.DisableJobsAsync(new ClientInfo(ClientName), jobNames);
+        ShowMessage(success ? ToastType.Success : ToastType.Danger, message);
+        selectedJobs.Clear();
+        await ReloadGrid();
+        return;
+    }
+
+    
+
+    private async Task OnRegenerateJobs()
+    {
+        var (success, message) = await SchedulerService.RegenerateJobsAsync(new ClientInfo(ClientName));
+        ShowMessage(success ? ToastType.Success : ToastType.Danger, message);
+        await ReloadGrid();
+    }
+
+    private void ShowMessage(ToastType toastType, string message) => ToastService.Notify(new ToastMessage(toastType, message));
+}

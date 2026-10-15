@@ -1,0 +1,26 @@
+﻿@if (FeatureValue is null)
+{
+    <p>Loading...</p>
+}
+else
+{
+    <EditForm Model="FeatureValue" OnValidSubmit="OnValidSubmit">
+        <DataAnnotationsValidator />
+        <ValidationSummary />
+        
+        <div class="form-group">
+            <label for="valueInput">Value</label>
+            <InputText id="valueInput" class="form-control" @bind-Value="FeatureValue.SettingValue" />
+        </div>
+        <button type="submit" class="btn btn-primary">Save</button>
+        <button type="button" class="btn btn-secondary" @onclick="OnCancelRequested">Cancel</button>
+    </EditForm>
+}
+
+
+@code {
+    [Parameter] public SettingFeatureValue? FeatureValue { get; set; }
+    [Parameter] public EventCallback<MouseEventArgs> OnCancelRequested { get; set; }
+    [Parameter] public EventCallback<EditContext> OnValidSubmit { get; set; }
+    
+}

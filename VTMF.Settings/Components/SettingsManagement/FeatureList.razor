@@ -1,0 +1,75 @@
+﻿@using VTMF.Settings.Entities
+@using Microsoft.AspNetCore.Components
+
+<div>
+    @if (Features != null && Features.Any())
+    {
+        @foreach (var feature in Features)
+        {
+            <div class="row align-items-center">
+                <div class="col-4 d-flex align-items-center">
+                    @switch (feature.FeatureType)
+                    {
+                        case FeatureTypes.SettingGroup:
+                            @if (isFormVisible)
+                            {
+                                <div class="form-container">
+                                    <div class="mb-3">
+                                        <label for="additionalInput" class="form-label">Name:</label>
+                                        <input type="text" id="additionalInput" class="form-control" @bind="newSettingName" />
+                                        <div>
+                                            <InputRadioGroup @bind-Value="selectedPosition">
+                                                <div class="form-check">
+                                                    <InputRadio Value="PositionOption.First"/> <label class="form-check-label">First</label>
+                                                </div>
+                                                <div class="form-check">
+                                                    <InputRadio Value="PositionOption.Last" /> <label class="form-check-label">Last</label>
+                                                </div>
+                                                <div class="form-check">
+                                                <InputRadio Value="PositionOption.After" /> <label>After</label>
+                                                <input type="text" id="afterSettingName" class="form-control" placeholder="Enter name" @bind="afterSettingName" />
+                                                </div>
+                                            </InputRadioGroup>
+                                        </div>
+                                    </div>
+                                    <div class="d-flex gap-2">
+                                        <button class="btn btn-primary" @onclick="SubmitForm">Submit</button>
+                                        <button class="btn btn-secondary" @onclick="CancelForm">Cancel</button>
+                                    </div>
+                                </div>
+                            }
+                            else
+                            {
+                                <i role="button" class="bi bi-plus-circle me-2" @onclick="@(() => ShowForm(feature.FeatureName))"></i>
+                                @feature.FeatureName
+                            }
+                            break;
+                        case FeatureTypes.SettingReplace:
+                            <i role="button" class="bi bi-file-arrow-down me-2" @onclick="@(() => SubmitFeature(feature.FeatureName))"></i>
+                            @feature.FeatureName
+                            break;
+                        case FeatureTypes.SettingUpdate:
+                            <i role="button" class="bi bi-file-earmark-diff me-2" @onclick="@(() => SubmitFeature(feature.FeatureName))"></i>
+                            @feature.FeatureName
+                            break;
+                        case FeatureTypes.SettingMove:
+                            <i role="button" class="bi bi-arrow-up-circle me-2" @onclick="@(() => SubmitFeature(feature.FeatureName))"></i>
+                            @feature.FeatureName
+                            break;
+                        default:
+                            <i role="button" class="bi bi-plus-circle me-2" @onclick="@(() => SubmitFeature(feature.FeatureName))"></i>
+                            @feature.FeatureName
+                            break;
+                        
+                    }
+                </div>
+                <div class="col-8">
+                    <span> @feature.Label</span>
+                    @feature.Description
+                    </div>
+            </div>
+        }
+    }
+</div>
+
+

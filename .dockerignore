@@ -1,0 +1,101 @@
+# .dockerignore for C#/.NET project
+# 1. Version control
+.git/
+.gitignore
+.svn/
+.hg/
+
+# 2. IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*.sublime*
+*.code-workspace
+
+# 3. Build outputs and development artifacts
+bin/
+obj/
+dist/
+build/
+out/
+debug/
+*.log
+*.tmp
+*.temp
+
+# 4. Test and coverage artifacts
+test/
+tests/
+*.test
+.pytest_cache/
+.coverage
+
+# 5. Language-specific (non-C#) patterns
+__pycache__/
+*.pyc
+*.pyo
+node_modules/
+npm-debug.log
+yarn-debug.log
+/vendor/
+.go-cache/
+*.class
+.gradle/
+
+# 6. Environment and secrets
+.env*
+*.env
+*.pem
+*.key
+*.crt
+config.local.*
+*.local.yml
+.local/
+
+# 7. Project-specific and documentation
+.vs/
+*.vsidx
+*.db
+*.bin
+*.v2
+*.suo
+*.mpack
+*.backup.json
+*.user
+CopilotSnapshots/
+ProjectEvaluation/
+DesignTimeBuild/
+FileContentIndex/
+copilot-chat/
+README*
+*.md
+docs/
+DELIVERY_SUMMARY.md
+GETTING_STARTED.md
+IMPLEMENTATION_CHECKLIST.md
+PROJECT_SUMMARY.md
+QUICK_REFERENCE.md
+
+# 8. Docker and compose files
+Dockerfile*
+docker-compose*
+
+# 9. Temporary and local files
+tmp/
+temp/
+
+# 10. Miscellaneous
+*.bak
+*.old
+*.orig
+
+# 11. Exclude unwanted config
+applicationhost.config
+
+# 12. Exclude all files in skipped directories (if any)
+# (No skipped files listed)
+
+config-*/
+
+# End of .dockerignore

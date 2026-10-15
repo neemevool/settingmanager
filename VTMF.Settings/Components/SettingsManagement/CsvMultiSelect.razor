@@ -1,0 +1,161 @@
+@namespace VTMF.Settings.Components.SettingsManagement
+
+<div class="csv-multiselect position-relative" @onkeydown="OnKeyDown">
+    <button type="button"
+            id="@Id"
+            class="form-select text-start"
+            @onclick="Toggle"
+            disabled="@Disabled">
+        <span class="d-inline-block text-truncate" style="max-width: 100%;">@DisplayText</span>
+    </button>
+    @if (isOpen)
+    {
+        <div class="dropdown-menu show w-100 p-2" style="max-height: 260px; overflow-y: auto;">
+            @if (!Options.Any())
+            {
+                <div class="text-muted small px-2">No options available.</div>
+            }
+            else
+            {
+                @foreach (var opt in Options)
+                {
+                    var inputId = $"{componentId}-{opt.Value}";
+                    <div class="form-check">
+                        <input class="form-check-input"
+                               type="@(SingleSelect ? "radio" : "checkbox")"
+                               id="@inputId"
+                               name="@componentId"
+                               checked="@IsSelected(opt.Value)"
+                               @onchange="@((ChangeEventArgs e) => OnOptionToggledAsync(opt.Value, SingleSelect || (e.Value is bool b && b)))" />
+                        <label class="form-check-label" for="@inputId">
+                            @(string.IsNullOrWhiteSpace(opt.Label) ? opt.Value : $"{opt.Value} - {opt.Label}")
+                        </label>
+                    </div>
+                }
+            }
+        </div>
+    }
+</div>
+
+<style>
+    .csv-multiselect .dropdown-menu {
+        z-index: 1060;
+    }
+</style>
+
+@code {
+    [Parameter] public string? Value { get; set; }
+    [Parameter] public EventCallback<string?> ValueChanged { get; set; }
+    [Parameter] public IEnumerable<SelectOption> Options { get; set; } = Enumerable.Empty<SelectOption>();
+    [Parameter] public bool SingleSelect { get; set; }
+    [Parameter] public string? Placeholder { get; set; }
+    [Parameter] public string? Id { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+
+    private bool isOpen;
+    private readonly string componentId = $"csvms-{Guid.NewGuid():N}";
+    private List<string> selectedValues = new();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        Reconcile();
+
+        // If inbound CSV contained unknown or duplicate tokens, emit the cleaned value
+        // back up so the bound model matches what's displayed.
+        if (Options.Any())
+        {
+            var cleaned = BuildCsv(selectedValues);
+            if (!CsvEqual(cleaned, Value))
+            {
+                await ValueChanged.InvokeAsync(cleaned);
+            }
+        }
+    }
+
+    private void Reconcile()
+    {
+        var allowed = Options.Select(o => o.Value).ToHashSet();
+        var parsed = ParseCsv(Value);
+
+        var filtered = parsed.Where(allowed.Contains).ToList();
+        if (SingleSelect && filtered.Count > 1)
+            filtered = filtered.Take(1).ToList();
+
+        selectedValues = filtered;
+    }
+
+    private static List<string> ParseCsv(string? csv)
+    {
+        if (string.IsNullOrWhiteSpace(csv))
+            return new();
+
+        var seen = new HashSet<string>();
+        var result = new List<string>();
+        foreach (var raw in csv.Split(','))
+        {
+            var token = raw.Trim();
+            if (token.Length == 0) continue;
+            if (seen.Add(token)) result.Add(token);
+        }
+        return result;
+    }
+
+    private static string? BuildCsv(List<string> values)
+        => values.Count == 0 ? null : string.Join(",", values);
+
+    private static bool CsvEqual(string? a, string? b)
+        => string.IsNullOrEmpty(a) && string.IsNullOrEmpty(b) || a == b;
+
+    private bool IsSelected(string value) => selectedValues.Contains(value);
+
+    private string DisplayText
+    {
+        get
+        {
+            if (selectedValues.Count == 0)
+                return Placeholder ?? (SingleSelect ? "Select..." : "Select values...");
+
+            return string.Join(", ", selectedValues);
+        }
+    }
+
+    private void Toggle() => isOpen = !isOpen;
+
+    private void Close() => isOpen = false;
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape" && isOpen)
+            isOpen = false;
+    }
+
+    private async Task OnOptionToggledAsync(string value, bool selected)
+    {
+        if (SingleSelect)
+        {
+            if (selected)
+            {
+                selectedValues = new List<string> { value };
+                isOpen = false;
+            }
+            else
+            {
+                selectedValues.Clear();
+            }
+        }
+        else
+        {
+            if (selected)
+            {
+                if (!selectedValues.Contains(value))
+                    selectedValues.Add(value);
+            }
+            else
+            {
+                selectedValues.Remove(value);
+            }
+        }
+
+        await ValueChanged.InvokeAsync(BuildCsv(selectedValues));
+    }
+}

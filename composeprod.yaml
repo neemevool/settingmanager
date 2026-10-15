@@ -1,0 +1,14 @@
+services:
+  vtmf-settings:
+    image: vtmf/settingsmanager:v1.13
+    ports:
+      - "8080:8080"
+    env_file: settings.env
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+    volumes:
+      - data-protection-keys:/app/keys
+      - ${SQL_SCRIPTS_PATH}:/app/sql-scripts
+
+volumes:
+  data-protection-keys:

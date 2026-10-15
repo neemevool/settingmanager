@@ -1,0 +1,283 @@
+@using VTMF.Settings.Entities
+@using VTMF.Settings.Services
+
+<Modal @ref="modalRef" Title="@(isEditMode ? "Edit Process Type" : "Add New Process Type")" Size="ModalSize.Large">
+    <BodyTemplate>
+        <form>
+            <div class="row mb-3">
+                <label class="col-sm-3 col-form-label">Id</label>
+                <div class="col-sm-9">
+                    <input type="text" class="form-control" value="@(formData.Id > 0 ? formData.Id.ToString() : "")" disabled>
+                </div>
+            </div>
+
+            <div class="row mb-3">
+                <label class="col-sm-3 col-form-label">Name <span class="text-danger">*</span></label>
+                <div class="col-sm-9">
+                    <input type="text" class="form-control @(errors.ContainsKey("Name") ? "is-invalid" : "")"
+                        maxlength="50"
+                        @bind="formData.Name"
+                        disabled="@isEditMode" />
+                    @if (errors.ContainsKey("Name"))
+                    {
+                        <div class="invalid-feedback d-block">@errors["Name"]</div>
+                    }
+                </div>
+            </div>
+
+            <div class="row mb-3">
+                <label class="col-sm-3 col-form-label">Display Label <span class="text-danger">*</span></label>
+                <div class="col-sm-9">
+                    <input type="text" class="form-control @(errors.ContainsKey("DisplayLabel") ? "is-invalid" : "")"
+                        maxlength="200"
+                        @bind="formData.DisplayLabel" />
+                    @if (errors.ContainsKey("DisplayLabel"))
+                    {
+                        <div class="invalid-feedback d-block">@errors["DisplayLabel"]</div>
+                    }
+                </div>
+            </div>
+
+            <div class="row mb-3">
+                <label class="col-sm-3 col-form-label">Tag <span class="text-danger">*</span></label>
+                <div class="col-sm-9">
+                    <input type="text" class="form-control @(errors.ContainsKey("Tag") ? "is-invalid" : "")"
+                        maxlength="50"
+                        @bind="formData.Tag" />
+                    @if (errors.ContainsKey("Tag"))
+                    {
+                        <div class="invalid-feedback d-block">@errors["Tag"]</div>
+                    }
+                </div>
+            </div>
+
+            <div class="row mb-3">
+                <label class="col-sm-3 col-form-label">Process Type Name <span class="text-danger">*</span></label>
+                <div class="col-sm-9">
+                    <select class="form-select @(errors.ContainsKey("ProcessTypeName") ? "is-invalid" : "")"
+                        @bind="formData.ProcessTypeName"
+                        disabled="@isEditMode">
+                        <option value="">-- Select --</option>
+                        @foreach (var name in ProcessType.GetProcessTypeNames())
+                        {
+                            <option value="@name">@name</option>
+                        }
+                    </select>
+                    @if (errors.ContainsKey("ProcessTypeName"))
+                    {
+                        <div class="invalid-feedback d-block">@errors["ProcessTypeName"]</div>
+                    }
+                </div>
+            </div>
+
+            <div class="row mb-3">
+                <label class="col-sm-3 col-form-label">Data Procedures</label>
+                <div class="col-sm-9">
+                    <input type="text" class="form-control"
+                        maxlength="50"
+                        @bind="formData.DataProcedures" />
+                </div>
+            </div>
+
+            <div class="row mb-3">
+                <label class="col-sm-3 col-form-label">Setting Procedures</label>
+                <div class="col-sm-9">
+                    <input type="text" class="form-control"
+                        maxlength="50"
+                        @bind="formData.SettingProcedures" />
+                </div>
+            </div>
+
+            <div class="row mb-3">
+                <label class="col-sm-3 col-form-label">Environment <span class="text-danger">*</span></label>
+                <div class="col-sm-9">
+                    <input type="text" class="form-control @(errors.ContainsKey("Environment") ? "is-invalid" : "")"
+                        maxlength="50"
+                        @bind="formData.Environment" />
+                    @if (errors.ContainsKey("Environment"))
+                    {
+                        <div class="invalid-feedback d-block">@errors["Environment"]</div>
+                    }
+                </div>
+            </div>
+
+            <div class="row mb-3">
+                <label class="col-sm-3 col-form-label">Auto Start</label>
+                <div class="col-sm-9 d-flex align-items-center">
+                    <input type="checkbox" class="form-check-input"
+                        @bind="formData.AutoStart" />
+                </div>
+            </div>
+
+            <div class="row mb-3">
+                <label class="col-sm-3 col-form-label">Screen</label>
+                <div class="col-sm-9">
+                    <input type="text" class="form-control"
+                        maxlength="50"
+                        @bind="formData.Screen" />
+                </div>
+            </div>
+
+            <div class="row mb-3">
+                <label class="col-sm-3 col-form-label">Order Nr</label>
+                <div class="col-sm-9">
+                    <input type="number" class="form-control"
+                        @bind="formData.OrderNr" />
+                </div>
+            </div>
+
+            <div class="row mb-3">
+                <label class="col-sm-3 col-form-label">Default Visible</label>
+                <div class="col-sm-9 d-flex align-items-center">
+                    <input type="checkbox" class="form-check-input"
+                        @onchange="(ChangeEventArgs e) => HandleDefaultVisibleChange(e.Value as bool? ?? false)"
+                        checked="@(formData.DefaultVisible == 1)" />
+                </div>
+            </div>
+
+            <div class="row mb-3">
+                <label class="col-sm-3 col-form-label">Worker Groups</label>
+                <div class="col-sm-9">
+                    <input type="text" class="form-control"
+                        maxlength="300"
+                        @bind="formData.WorkerGroups" />
+                </div>
+            </div>
+        </form>
+    </BodyTemplate>
+    <FooterTemplate>
+        <Button Color="ButtonColor.Secondary" @onclick="OnCancel">Cancel</Button>
+        <Button Color="ButtonColor.Primary" @onclick="OnSave" Disabled="@isSaving">Save</Button>
+    </FooterTemplate>
+</Modal>
+
+@code {
+    private Modal? modalRef;
+    private bool isEditMode = false;
+    private bool isSaving = false;
+    private Dictionary<string, string> errors = new();
+
+    private ProcessType formData = new()
+    {
+        Id = 0,
+        Name = string.Empty,
+        DisplayLabel = string.Empty,
+        Tag = string.Empty,
+        ProcessTypeName = string.Empty,
+        Environment = ProcessType.DefaultEnvironment,
+        AutoStart = false,
+        DefaultVisible = 0,
+        ClientName = string.Empty
+    };
+
+    [Parameter]
+    public string ClientName { get; set; } = string.Empty;
+
+    [Parameter]
+    public ISettingsService SettingsService { get; set; } = null!;
+
+    [Parameter]
+    public EventCallback<ProcessType> OnSaveCallback { get; set; }
+
+    public async Task ShowEditModal(ProcessType processType)
+    {
+        isEditMode = true;
+        errors.Clear();
+        formData = new()
+        {
+            Id = processType.Id,
+            Name = processType.Name,
+            DisplayLabel = processType.DisplayLabel,
+            Tag = processType.Tag,
+            ProcessTypeName = processType.ProcessTypeName,
+            DataProcedures = processType.DataProcedures,
+            SettingProcedures = processType.SettingProcedures,
+            Environment = processType.Environment,
+            AutoStart = processType.AutoStart,
+            Screen = processType.Screen,
+            OrderNr = processType.OrderNr,
+            DefaultVisible = processType.DefaultVisible ?? 0,
+            WorkerGroups = processType.WorkerGroups,
+            ClientName = ClientName
+        };
+        await modalRef!.ShowAsync();
+    }
+
+    public async Task ShowCreateModal()
+    {
+        isEditMode = false;
+        errors.Clear();
+        formData = new()
+        {
+            Id = 0,
+            Name = string.Empty,
+            DisplayLabel = string.Empty,
+            Tag = string.Empty,
+            ProcessTypeName = string.Empty,
+            Environment = ProcessType.DefaultEnvironment,
+            AutoStart = false,
+            DefaultVisible = 0,
+            ClientName = ClientName
+        };
+        await modalRef!.ShowAsync();
+    }
+
+    private void HandleDefaultVisibleChange(bool value)
+    {
+        formData.DefaultVisible = value ? 1 : 0;
+    }
+
+    private async Task OnSave()
+    {
+        errors.Clear();
+
+        // Validate
+        if (string.IsNullOrWhiteSpace(formData.Name))
+            errors["Name"] = "Name is required";
+        if (string.IsNullOrWhiteSpace(formData.DisplayLabel))
+            errors["DisplayLabel"] = "Display Label is required";
+        if (string.IsNullOrWhiteSpace(formData.Tag))
+            errors["Tag"] = "Tag is required";
+        if (string.IsNullOrWhiteSpace(formData.ProcessTypeName))
+            errors["ProcessTypeName"] = "Process Type Name is required";
+        if (string.IsNullOrWhiteSpace(formData.Environment))
+            errors["Environment"] = "Environment is required";
+
+        // Check for duplicate name in create mode
+        if (!isEditMode && string.IsNullOrWhiteSpace(formData.Name) == false)
+        {
+            var exists = await SettingsService.ProcessTypeNameExists(ClientName, formData.Name);
+            if (exists)
+                errors["Name"] = "A process type with this name already exists.";
+        }
+
+        if (errors.Count > 0)
+            return;
+
+        isSaving = true;
+        try
+        {
+            if (isEditMode)
+            {
+                await SettingsService.UpdateProcessType(ClientName, formData);
+            }
+            else
+            {
+                var newId = await SettingsService.InsertProcessType(ClientName, formData);
+                formData.Id = newId;
+            }
+
+            await OnSaveCallback.InvokeAsync(formData);
+            await modalRef!.HideAsync();
+        }
+        finally
+        {
+            isSaving = false;
+        }
+    }
+
+    private async Task OnCancel()
+    {
+        await modalRef!.HideAsync();
+    }
+}

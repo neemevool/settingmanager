@@ -1,0 +1,81 @@
+﻿@page "/manager/{ClientName}/{ProcessId:int}"
+@rendermode InteractiveServer
+@using VTMF.Settings.Entities
+@using VTMF.Settings.Services
+@using VTMF.Settings.Models
+
+@inject ISettingsService SettingsService
+@inject NavigationManager NavigationManager
+
+<PageTitle>Select what to manage</PageTitle>
+
+<div class="container py-5">
+    <h1 class="mb-2">Manager : @ClientName</h1>
+    <p class="text-muted fs-6 mb-4">Select what you want to manage for @ClientName</p>
+    @if (isLoading)
+    {
+        <div class="d-flex justify-content-center align-items-center py-5">
+            <p class="text-muted">⏳ Loading options...</p>
+        </div>
+    }
+    else if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <div class="alert alert-danger" role="alert">
+            @errorMessage
+        </div>
+    }
+    <div class="row g-4">
+        <div class="col-lg-4 col-md-6 col-sm-12">
+            <div class="card h-100 shadow-sm border-0 cursor-pointer"
+                 @onclick="() => SelectSettings()"
+                 style="cursor: pointer; transition: all 0.3s ease;">
+                <div class="card-body text-center d-flex flex-column align-items-center">
+                    <div class="fs-1 mb-3">⚙</div>
+                    <h5 class="card-title fw-bold mb-2">Settings</h5>
+                    <p class="card-text text-muted small mb-3">Settings</p>
+                    <small class="text-primary fw-medium">Configure →</small>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-lg-4 col-md-6 col-sm-12">
+            <div class="card h-100 shadow-sm border-0 cursor-pointer"
+                 @onclick="() => SelectFeatures()"
+                 style="cursor: pointer; transition: all 0.3s ease;">
+                <div class="card-body text-center d-flex flex-column align-items-center">
+                    <div class="fs-1 mb-3">🧰</div>
+                    <h5 class="card-title fw-bold mb-2">Features</h5>
+                    <p class="card-text text-muted small mb-3">Features</p>
+                    <small class="text-primary fw-medium">Configure →</small>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-lg-4 col-md-6 col-sm-12">
+            <div class="card h-100 shadow-sm border-0 cursor-pointer"
+                 @onclick="() => CopyFromAnotherClient()"
+                 style="cursor: pointer; transition: all 0.3s ease;">
+                <div class="card-body text-center d-flex flex-column align-items-center">
+                    <div class="fs-1 mb-3">🪣</div>
+                    <h5 class="card-title fw-bold mb-2">Copy</h5>
+                    <p class="card-text text-muted small mb-3">Copy settings from another client</p>
+                    <small class="text-primary fw-medium">Copy →</small>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="row g-4 mt-2">
+        <div class="col-lg-4 col-md-6 col-sm-12">
+            <div class="card h-100 shadow-sm border-0 cursor-pointer"
+                 @onclick="() => BackupSettings()"
+                 style="cursor: pointer; transition: all 0.3s ease;">
+                <div class="card-body text-center d-flex flex-column align-items-center">
+                    <div class="fs-1 mb-3">🔋</div>
+                    <h5 class="card-title fw-bold mb-2">Backup</h5>
+                    <p class="card-text text-muted small mb-3">Backup and restore settings</p>
+                    <small class="text-primary fw-medium">Backup →</small>
+                </div>
+            </div>
+        </div>
+    </div>  
+</div>

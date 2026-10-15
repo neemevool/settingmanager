@@ -1,0 +1,175 @@
+@page "/settings/{ClientName}/{ProcessId:int}"
+
+@rendermode InteractiveServer
+@using VTMF.Settings.Entities
+@using VTMF.Settings.Services
+@using VTMF.Settings.Models
+
+@inject ISettingsService SettingsService
+@inject ISettingsMetadataService SettingMetaService
+@inject ToastService ToastService
+
+<PageTitle>@ClientName : Settings</PageTitle>
+
+
+<div class="container-fluid py-4">
+    <h1 class="mb-4 text-dark"<a href="/process-types/@ClientName">@ClientName</a> : @selectedProcessType?.Name</h1>
+    
+
+    @if (isLoading)
+    {
+        <div class="d-flex justify-content-center align-items-center py-5">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="ms-3 text-muted fs-5">Loading...</p>
+        </div>
+    }
+    else
+    {
+        @if (!selectedProcessType!.IsDefaultEnvironment)
+        {
+            <div class="text-danger">@selectedProcessType?.Environment</div>
+        }
+        <!-- get and set session here -->
+        <div class="d-flex align-items-center gap-2 mb-3">
+            <label for="sessionInput" class="form-label fw-semibold mb-0 text-nowrap">Working Session:</label>
+            <input id="sessionInput" type="text" class="form-control"
+                   placeholder="Enter working session description"
+                   @bind="editingSession" @bind:event="oninput" />
+            <button class="btn btn-primary text-nowrap" @onclick="SaveSession" disabled="@(editingSession == currentSession)">
+                <i class="bi bi-check-lg"></i> Set
+            </button>
+        </div>
+
+        <!-- Step 1: Process Type Selection -->
+        <div class="card bg-light mb-3">
+            <div class="card-body">
+                <div class="row g-3">
+                    
+                    <!-- Step 2: Store Table Selection (shown after process type is selected) -->
+                    @if (selectedProcessType != null && storeTables.Any())
+                    {
+                        <div class="col-md-6">
+                            <label for="storeTableSelect" class="form-label fw-semibold">Store Table:</label>
+                            <select id="storeTableSelect" class="form-select" @onchange="OnStoreTableChanged" value="@(selectedStoreTable ?? "")">
+                                <option value="">-- Select Store Table --</option>
+                                @foreach (var st in storeTables)
+                                {
+                                    <option value="@st">@st</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-md-6 d-flex align-items-end">
+                            <button class="btn btn-primary" @onclick="ManageTables">
+                                <i class="bi bi-gear"></i> Manage tables
+                            </button>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 3-7: Settings Tree View (shown after store table is selected) -->
+        @if (selectedProcessType != null && !string.IsNullOrEmpty(selectedStoreTable))
+        {
+            <!-- Toolbar -->
+            <div class="d-flex flex-wrap gap-2 mb-3 align-items-center">
+                @if (treeRootNodes.Any())
+                {
+                    <button class="btn btn-primary" @onclick="ExpandAll">
+                        <i class="bi bi-arrows-expand"></i> Expand All
+                    </button>
+                    <button class="btn btn-secondary" @onclick="CollapseAll">
+                        <i class="bi bi-arrows-collapse"></i> Collapse All
+                    </button>
+                }
+
+                <button class="btn btn-secondary" @onclick="AddSettingsManually">
+                    <i class="bi bi-hand-index"></i> Add Manually
+                </button>
+
+                <button class="btn btn-warning" @onclick="ReloadSettings">
+                    <i class="bi bi-arrow-clockwise"></i> Reload
+                </button>
+                @if (hasChanges)
+                {
+                    <span class="badge bg-danger fs-6 ms-2" style="animation: pulse 2s infinite;">
+                        ● Unsaved changes
+                    </span>
+                }
+            </div>
+
+            <!-- Settings Info -->
+            <div class="alert alert-secondary d-flex flex-wrap gap-4 mb-3" role="alert">
+                <span>Process: <strong class="text-dark">@selectedProcessType.Name</strong></span>
+                <span>Store Table: <strong class="text-dark">@selectedStoreTable</strong></span>
+                <span>Total Settings: <strong class="text-dark">@totalSettingsCount</strong></span>
+            </div>
+
+            <!-- a textarea where settings can be entered manually. Visible when AddSettingsManually is invoked -->
+            @if (showManualSettingsForm)
+            {
+                <div class="card bg-light border-primary mb-3">
+                    <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">Add Settings Manually</h5>
+                        <button type="button" class="btn btn-sm btn-light" @onclick="CloseManualSettingsForm">
+                            <i class="bi bi-x-lg"></i>
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        <form @onsubmit="SaveManualSettings">
+                            <div class="mb-3">
+                                <label for="manualSettingsTextarea" class="form-label">Enter Settings</label>
+                                <textarea class="form-control" id="manualSettingsTextarea"
+                                          rows="10" placeholder="Enter settings one per line"
+                                          @bind="newManualSettings"></textarea>
+                                <small class="form-text text-muted">Each setting must consist from full name and value, separated by => </small>
+                            </div>
+                            <div class="d-flex gap-2">
+                                <button type="submit" class="btn btn-success">
+                                    <i class="bi bi-save"></i> Save
+                                </button>
+                                <button type="button" class="btn btn-secondary" @onclick="CloseManualSettingsForm">
+                                    <i class="bi bi-x-circle"></i> Cancel
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            }
+
+
+            <!-- Tree Container -->
+            <div class="card border-1">
+                <div class="card-body p-3" style="max-height: calc(100vh - 400px); overflow-y: auto;">
+                    @foreach (var rootNode in treeRootNodes)
+                    {
+                        <SettingNode Node="@rootNode"
+                                     OnValueChanged="@OnSettingValueChanged"
+                                     OnToggleExpanded="@OnToggleExpanded"
+                                     OnLoadMetadata="@OnLoadMetadata"
+                                     OnDeleteSetting="@DeleteSetting"
+                                     OnStartEdit="@OnStartEdit"
+                                     OnLoadFeatures="@OnLoadFeatures"
+                                     OnApplyFeature="@OnApplyFeature"
+                                     OnDeleteNode="@DeleteNode"
+                                     OnAddNewChild="@OnAddNewChild"
+                                     OnMoveNodeUp="@MoveNodeUp"
+                                     OnSaveDescription="@OnSaveDescription" />
+                    }
+                </div>
+            </div>
+        }
+        else if (selectedProcessType != null && !string.IsNullOrEmpty(selectedStoreTable) && !treeRootNodes.Any())
+        {
+            <div class="alert alert-info text-center py-5" role="alert">
+                <p class="mb-0 fs-5">No settings found for the selected process type and store table.</p>
+            </div>
+        }
+    }
+</div>
+
+
+
+

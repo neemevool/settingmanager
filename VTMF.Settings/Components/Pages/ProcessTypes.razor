@@ -1,0 +1,148 @@
+@page "/process-types/{ClientName}"
+@rendermode InteractiveServer
+@using VTMF.Settings.Entities
+@using VTMF.Settings.Services
+@using VTMF.Settings.Components.SettingsManagement
+@inject ISettingsService SettingsService
+@inject NavigationManager NavigationManager
+
+<PageTitle>Process Types</PageTitle>
+
+<div class="container py-5 mt-3">
+
+
+    @if (isLoading)
+    {
+        <div class="d-flex justify-content-center align-items-center py-5">
+            <p class="text-muted">⏳ Loading process types...</p>
+        </div>
+    }
+    @if (!string.IsNullOrEmpty(errorMessage))
+    {
+        <div class="alert alert-danger" role="alert">
+            @errorMessage
+        </div>
+    }
+    @if (!isLoading)
+    {
+        <h1>Process Types</h1>
+        <div class="row g-4">
+            @if (processTypes.Any())
+            {
+                @foreach (var processType in processTypes)
+                {
+                    <div class="col-auto" Style="position: relative;">
+                        <Card Style="width:18rem; height: 100%;">
+                            <div Style="position: absolute; top: 0.5rem; left: 0.5rem; cursor: pointer; font-size: 1.2rem; z-index: 10;"
+                                @onclick="() => OpenEditModal(processType)" title="Edit process type">
+                                <i class="bi bi-pencil-square"></i>
+                            </div>
+                            <span Style="font-size: 3rem; text-align: center; display: block; margin-top: 1rem;">⚙️</span>
+                            @if (!processType.IsDefaultEnvironment)
+                            {
+                                <div Style="position: absolute; top: 0.5rem; right: 0.5rem; color: red; font-size: 0.75rem; font-weight: bold;">
+                                    @processType.Environment
+                                </div>
+                            }
+                            <CardBody Style="display: flex; flex-direction: column; align-items: center; text-align: center;">
+                                <CardTitle>@processType.Name</CardTitle>
+                                <CardTitle>@processType.DisplayLabel</CardTitle>
+                                <a href="javascript:void(0)" @onclick="() => SelectProcessType(processType)" style="text-decoration: none; cursor: pointer;">
+                                    Configure →
+                                </a>
+                            </CardBody>
+                        </Card>
+                    </div>
+                }
+
+                <div class="col-auto">
+                    <Card Style="width:18rem; height: 100%; cursor: pointer;" @onclick="OpenCreateModal">
+                        <CardBody Style="display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; height: 250px;">
+                            <div Style="font-size: 3rem; margin-bottom: 1rem;">+</div>
+                            <CardTitle>Add new Process Type</CardTitle>
+                        </CardBody>
+                    </Card>
+                </div>
+            }
+            else
+            {
+                <div class="col-12 text-center py-5">
+                    <p class="text-muted">No process types found.</p>
+                </div>
+                <div class="col-auto mx-auto">
+                    <Card Style="width:18rem; cursor: pointer;" @onclick="OpenCreateModal">
+                        <CardBody Style="display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; height: 250px;">
+                            <div Style="font-size: 3rem; margin-bottom: 1rem;">+</div>
+                            <CardTitle>Add new Process Type</CardTitle>
+                        </CardBody>
+                    </Card>
+                </div>
+            }
+        </div>
+    }
+
+</div>
+
+<ProcessTypeFormModal @ref="modalRef" ClientName="@ClientName" SettingsService="@SettingsService" OnSaveCallback="HandleModalSave" />
+
+@code {
+    [Parameter]
+    public string ClientName { get; set; } = string.Empty;
+
+    private ProcessTypeFormModal? modalRef;
+    private IEnumerable<ProcessType> processTypes = Enumerable.Empty<ProcessType>();
+    private bool isLoading = true;
+    private string? errorMessage;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await RefreshProcessTypes();
+        }
+        catch (Exception ex)
+        {
+            errorMessage = $"Error loading process types: {ex.Message}";
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task RefreshProcessTypes()
+    {
+        processTypes = await SettingsService.GetProcessTypes(ClientName);
+    }
+
+    private void SelectProcessType(ProcessType processType)
+    {
+        NavigationManager.NavigateTo($"/manager/{ClientName}/{processType.Id}");
+    }
+
+    private async Task OpenEditModal(ProcessType processType)
+    {
+        await modalRef!.ShowEditModal(processType);
+    }
+
+    private async Task OpenCreateModal()
+    {
+        await modalRef!.ShowCreateModal();
+    }
+
+    private async Task HandleModalSave(ProcessType processType)
+    {
+        await RefreshProcessTypes();
+    }
+}
+
+<style>
+    .cursor-pointer {
+        transition: all 0.3s ease;
+    }
+
+        .cursor-pointer:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.15) !important;
+        }
+</style>

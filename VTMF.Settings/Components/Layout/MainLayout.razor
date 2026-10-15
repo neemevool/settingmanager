@@ -1,0 +1,64 @@
+@inherits LayoutComponentBase
+@inject ToastService ToastService
+
+
+<div class="page">
+    <div class="sidebar">
+        <div class="top-row">
+            <a class="navbar-brand" href="">VTMF Settings</a>
+        </div>
+
+        <nav class="flex-column">
+            <div class="nav-item px-3">
+                <a class="nav-link" href="/">
+                    <span class="icon">🏠</span> Home
+                </a>
+            </div>
+            <div class="nav-item px-3">
+                <a class="nav-link" href="/clients">
+                    <span class="icon">📋</span> Clients
+                </a>
+            </div>
+            <div class="nav-item px-3">
+                <a class="nav-link" href="/feature-settings">
+                    <span class="icon">⚙️</span> Settings Manager
+                </a>
+            </div>
+        </nav>
+    </div>
+
+    <main>
+        <div class="top-bar">
+            <button class="btn-menu" @onclick="ToggleSidebar">☰</button>
+            <div class="app-title">Settings Management Application</div>
+        </div>
+        
+        <article class="content px-4">
+            @Body
+        </article>
+    </main>
+</div>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>
+
+<Toasts class="p-3" AutoHide="true" Delay="4000" Placement="ToastsPlacement.TopRight" @rendermode="InteractiveServer" />
+
+
+
+
+
+
+@code {
+    private bool sidebarExpanded = true;
+
+    private void ToggleSidebar()
+    {
+        sidebarExpanded = !sidebarExpanded;
+    }
+
+    
+}

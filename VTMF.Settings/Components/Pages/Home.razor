@@ -1,0 +1,182 @@
+@page "/"
+@rendermode InteractiveServer
+@inject NavigationManager NavigationManager
+
+<PageTitle>Settings Management - Home</PageTitle>
+
+<div class="home-container">
+    <div class="welcome-section">
+        <h1>VTMF Settings Manager</h1>
+        <p class="lead">Manage application settings across different process types and store tables</p>
+    </div>
+
+    <div class="actions-section">
+        <div class="action-card" @onclick='() => NavigationManager.NavigateTo("/clients")'>
+            <div class="action-icon">📋</div>
+            <h3>View Clients</h3>
+            <p>Browse clients</p>
+            <button class="btn btn-primary">Go to Clients</button>
+        </div>
+
+        <div class="action-card" @onclick='() => NavigationManager.NavigateTo("/features")'>
+            <div class="action-icon">⚙️</div>
+            <h3>Manage Features</h3>
+            <p>Configure and manage features</p>
+            <button class="btn btn-primary">Go to Features Manager</button>
+        </div>
+
+        <div class="action-card" @onclick='() => NavigationManager.NavigateTo("/wiki")'>
+            <div class="action-icon">📖</div>
+            <h3>Wiki</h3>
+            <p>Documentation and notes for VTMF</p>
+            <button class="btn btn-primary">Wiki →</button>
+        </div>
+    </div>
+
+    <div class="info-section">
+        <h2>About Settings Manager</h2>
+        <div class="info-grid">
+            <div class="info-item">
+                <h4>🎯 Purpose</h4>
+                <p>This application manages settings for customer applications. Each deployment is specific to one customer server.</p>
+            </div>
+            <div class="info-item">
+                <h4>🌳 Tree Structure</h4>
+                <p>Settings are organized in a hierarchical tree based on dot notation (e.g., A.B.C.D).</p>
+            </div>
+            <div class="info-item">
+                <h4>📦 Store Tables</h4>
+                <p>Settings are grouped by store tables, which determine where settings are stored and accessed.</p>
+            </div>
+            <div class="info-item">
+                <h4>🔄 Central Metadata</h4>
+                <p>Setting definitions and metadata are managed centrally and synchronized across deployments.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .home-container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 40px 20px;
+    }
+
+    .welcome-section {
+        text-align: center;
+        margin-bottom: 50px;
+    }
+
+    .welcome-section h1 {
+        font-size: 42px;
+        color: #333;
+        margin-bottom: 15px;
+    }
+
+    .lead {
+        font-size: 20px;
+        color: #666;
+    }
+
+    .actions-section {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 30px;
+        margin-bottom: 60px;
+    }
+
+    .action-card {
+        background: white;
+        border: 2px solid #e9ecef;
+        border-radius: 12px;
+        padding: 30px;
+        text-align: center;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+    }
+
+    .action-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 12px 20px rgba(0, 0, 0, 0.15);
+        border-color: #007bff;
+    }
+
+    .action-icon {
+        font-size: 64px;
+        margin-bottom: 20px;
+    }
+
+    .action-card h3 {
+        color: #333;
+        margin-bottom: 15px;
+        font-size: 24px;
+    }
+
+    .action-card p {
+        color: #666;
+        margin-bottom: 20px;
+        line-height: 1.6;
+    }
+
+    .info-section {
+        background: #f8f9fa;
+        border-radius: 12px;
+        padding: 40px;
+    }
+
+    .info-section h2 {
+        text-align: center;
+        color: #333;
+        margin-bottom: 30px;
+        font-size: 28px;
+    }
+
+    .info-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 25px;
+    }
+
+    .info-item {
+        background: white;
+        padding: 20px;
+        border-radius: 8px;
+        border-left: 4px solid #007bff;
+    }
+
+    .info-item h4 {
+        color: #333;
+        margin-bottom: 10px;
+        font-size: 18px;
+    }
+
+    .info-item p {
+        color: #666;
+        line-height: 1.6;
+        margin: 0;
+    }
+
+    .btn {
+        padding: 10px 24px;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 16px;
+        font-weight: 500;
+        transition: all 0.2s;
+    }
+
+    .btn-primary {
+        background: #007bff;
+        color: white;
+    }
+
+    .btn-primary:hover {
+        background: #0056b3;
+        transform: translateY(-2px);
+    }
+
+    
+</style>
