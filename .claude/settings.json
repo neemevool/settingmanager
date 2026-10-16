@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(git ls-files | Select-String '\\\\.codegraph' ; Get-ChildItem -Recurse -Directory -Force -Filter .codegraph | ForEach-Object { $_.FullName; Get-Content \\(Join-Path $_.FullName 'config.json'\\) -TotalCount 40 })",
+      "PowerShell(Get-ChildItem -Force -Recurse -Depth 1 -Filter .codegraph -Directory | ForEach-Object { \"== $\\($_.FullName\\)\"; Get-ChildItem -Force $_.FullName | Select-Object Name,Length,LastWriteTime | Format-Table -AutoSize | Out-String })",
+      "PowerShell(codegraph *)",
+      "PowerShell(dotnet build *)",
+      "PowerShell(pwsh -NoProfile -File ./eng/verify.ps1 -Mode build -Target VTMF.Terminal.SPA)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -File \"$CLAUDE_PROJECT_DIR/.claude/hooks/redirect-dotnet.ps1\""
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "general-purpose",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -File \"$CLAUDE_PROJECT_DIR/eng/verify.ps1\" -Mode gate -FromHook",
+            "timeout": 900
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -65,3 +65,5 @@ TestResult.xml
 nunit-*.xml
 
 config-*/
+
+.codegraph
