@@ -58,6 +58,10 @@ public sealed class SmClient(SqlConnectionProvider connections)
         }
     }
 
+    public Task<IReadOnlyList<SmSettingUsage>> GetSettingsUsageAsync(
+        string client, string process, string? namePrefix = null, CancellationToken cancellationToken = default) =>
+        QueryAsync<SmSettingUsage>(client, "sm.GetSettingsUsage", new { process, namePrefix }, cancellationToken);
+
     private async Task<IReadOnlyList<T>> QueryAsync<T>(string client, string procedure, object? parameters, CancellationToken cancellationToken)
     {
         await using var connection = connections.GetConnection(client);
