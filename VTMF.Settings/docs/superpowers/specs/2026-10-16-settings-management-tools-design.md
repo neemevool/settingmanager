@@ -69,7 +69,7 @@ Responsibilities:
 <AnalysisModeSecurity>All</AnalysisModeSecurity>
 ```
 
-Target framework: `net9.0` (same as VTMF.Settings, which references Core).
+Target framework: `net10.0` (same as VTMF.Settings, which references Core).
 Consequence: code extracted from VTMF.Settings into Core must be brought to zero warnings under these rules. Where a
 rule cannot reasonably be satisfied (e.g. CA2100 for validated dynamic table names), suppress it narrowly with
 `[SuppressMessage(..., Justification = "...")]` at the member level — no project-wide `NoWarn`.
