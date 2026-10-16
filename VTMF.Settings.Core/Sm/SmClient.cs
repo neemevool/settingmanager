@@ -38,6 +38,26 @@ public sealed class SmClient(SqlConnectionProvider connections)
         CancellationToken cancellationToken = default) =>
         QueryAsync<SmSettingRow>(client, "sm.GetSettings", new { process, table, layer, namePrefix }, cancellationToken);
 
+    public async Task<SmEffectiveSettings> GetEffectiveSettingsAsync(
+        string client, string process, string table, string? environment = null, string? language = null,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = connections.GetConnection(client);
+        try
+        {
+            var command = new CommandDefinition("sm.GetEffectiveSettings", new { process, table, environment, language },
+                commandType: CommandType.StoredProcedure, cancellationToken: cancellationToken);
+            using var grid = await connection.QueryMultipleAsync(command).ConfigureAwait(false);
+            var info = await grid.ReadSingleAsync<SmEffectiveInfo>().ConfigureAwait(false);
+            var rows = (await grid.ReadAsync<SmEffectiveRow>().ConfigureAwait(false)).AsList();
+            return new SmEffectiveSettings { Info = info, Rows = rows };
+        }
+        catch (SqlException ex) when (SmException.TryTranslate(ex, out var translated))
+        {
+            throw translated;
+        }
+    }
+
     private async Task<IReadOnlyList<T>> QueryAsync<T>(string client, string procedure, object? parameters, CancellationToken cancellationToken)
     {
         await using var connection = connections.GetConnection(client);
