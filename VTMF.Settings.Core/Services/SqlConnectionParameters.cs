@@ -1,8 +1,8 @@
-﻿namespace VTMF.Settings.Services;
+namespace VTMF.Settings.Services;
 
 public class SqlConnectionParameters
 {
-    public static readonly string DefaultMetaBaseClientName = "DefaultMetaBase";
+    public const string DefaultMetaBaseClientName = "DefaultMetaBase";
     private string? connectionString;
     public string? Server { get; set; } = "Server=localhost;";
     public string? UserId { get; set; }

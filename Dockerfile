@@ -8,6 +8,8 @@ COPY VTMF.Settings VTMF.Settings
 
 COPY VTMF.SQLInstaller VTMF.SQLInstaller
 
+COPY VTMF.Settings.Core VTMF.Settings.Core
+
 # Restore dependencies
 RUN dotnet restore "VTMF.Settings/VTMF.Settings.csproj"
 

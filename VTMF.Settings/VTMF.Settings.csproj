@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\VTMF.SQLInstaller\VTMF.SQLInstaller.csproj" />
+    <ProjectReference Include="..\VTMF.Settings.Core\VTMF.Settings.Core.csproj" />
   </ItemGroup>
 
 </Project>
