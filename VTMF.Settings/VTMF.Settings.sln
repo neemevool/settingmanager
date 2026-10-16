@@ -11,6 +11,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VTMF.Settings.Core", "..\VT
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VTMF.Settings.Tests", "..\VTMF.Settings.Tests\VTMF.Settings.Tests.csproj", "{1047D78B-B4FD-4224-BA3C-C4E6C0473C24}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VTMF.Settings.Mcp", "..\VTMF.Settings.Mcp\VTMF.Settings.Mcp.csproj", "{4CDC2844-720C-4923-AE63-9822C2BD592D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -69,6 +71,18 @@ Global
 		{1047D78B-B4FD-4224-BA3C-C4E6C0473C24}.Release|x64.Build.0 = Release|Any CPU
 		{1047D78B-B4FD-4224-BA3C-C4E6C0473C24}.Release|x86.ActiveCfg = Release|Any CPU
 		{1047D78B-B4FD-4224-BA3C-C4E6C0473C24}.Release|x86.Build.0 = Release|Any CPU
+		{4CDC2844-720C-4923-AE63-9822C2BD592D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4CDC2844-720C-4923-AE63-9822C2BD592D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4CDC2844-720C-4923-AE63-9822C2BD592D}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{4CDC2844-720C-4923-AE63-9822C2BD592D}.Debug|x64.Build.0 = Debug|Any CPU
+		{4CDC2844-720C-4923-AE63-9822C2BD592D}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{4CDC2844-720C-4923-AE63-9822C2BD592D}.Debug|x86.Build.0 = Debug|Any CPU
+		{4CDC2844-720C-4923-AE63-9822C2BD592D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4CDC2844-720C-4923-AE63-9822C2BD592D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4CDC2844-720C-4923-AE63-9822C2BD592D}.Release|x64.ActiveCfg = Release|Any CPU
+		{4CDC2844-720C-4923-AE63-9822C2BD592D}.Release|x64.Build.0 = Release|Any CPU
+		{4CDC2844-720C-4923-AE63-9822C2BD592D}.Release|x86.ActiveCfg = Release|Any CPU
+		{4CDC2844-720C-4923-AE63-9822C2BD592D}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

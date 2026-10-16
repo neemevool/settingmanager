@@ -28,6 +28,7 @@
   <ItemGroup>
     <ProjectReference Include="..\VTMF.Settings.Core\VTMF.Settings.Core.csproj" />
     <ProjectReference Include="..\VTMF.SQLInstaller\VTMF.SQLInstaller.csproj" />
+    <ProjectReference Include="..\VTMF.Settings.Mcp\VTMF.Settings.Mcp.csproj" />
   </ItemGroup>
 
 </Project>

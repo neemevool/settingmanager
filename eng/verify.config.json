@@ -2,7 +2,8 @@
   "targets": [
     "VTMF.Settings/VTMF.Settings.csproj",
     "VTMF.SQLInstaller/VTMF.SQLInstaller.csproj",
-    "VTMF.Settings.Tests/VTMF.Settings.Tests.csproj"
+    "VTMF.Settings.Tests/VTMF.Settings.Tests.csproj",
+    "VTMF.Settings.Mcp/VTMF.Settings.Mcp.csproj"
   ],
   "buildArgs": ["-nologo", "-v", "q", "-clp:ErrorsOnly;NoSummary"],
   "testArgs": ["--no-build", "--nologo", "--logger", "console;verbosity=minimal"],
