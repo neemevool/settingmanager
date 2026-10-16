@@ -72,7 +72,6 @@ public sealed class EffectiveSettingsTests(SqlServerFixture fixture)
                 ("Directo.ApiKey", "********", "parent"),
                 ("Document.Query.Join", "True", "parent"),
                 ("Document.State.Terminal.New", "VNEW", "process"),
-                ("Unused.Setting", "1", "parent"),
             ],
             result.Rows.Select(r => (r.Name, r.Value, r.Source)).ToArray());
     }

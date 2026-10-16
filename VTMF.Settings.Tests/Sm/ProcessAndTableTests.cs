@@ -49,7 +49,7 @@ public sealed class ProcessAndTableTests(SqlServerFixture fixture)
         Assert.Equal("tprocDocumentListLayout", layout.PhysicalTable);
         var backend = Assert.Single(tables, t => t.View == "ServerProcessSettings");
         Assert.Equal("tprocvariant", backend.Owner);
-        Assert.Equal(1, backend.RowCount);
+        Assert.Equal(2, backend.RowCount);
     }
 
     [Fact]

@@ -45,6 +45,7 @@ INSERT INTO dbo.ServerProcessSettings (NAME, VALUE, workercode, ordernr, setting
  (N'tproc.Unused.Setting',                     N'1',          N'ALL',     0, N'Setting',       NULL),
  (N'tproc.Directo.ApiKey',                     N'secret-key', N'ALL',     0, N'ServerSetting', NULL),
  (N'tprocvariant.Document.State.Terminal.New', N'VNEW',       N'ALL',     0, N'Setting',       NULL),
+ (N'tprocvariant.Unused.Setting',              N'',           N'ALL',     0, N'Setting',       NULL),
  (N'tother.Other.Setting',                     N'o',          N'ALL',     0, N'Setting',       NULL);
 GO
 
