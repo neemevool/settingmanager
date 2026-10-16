@@ -277,8 +277,9 @@ changes to WS; migrating legacy `GetProcessSettingValue` code; UI approval workf
 
 ## 13. Risks
 
-- **Extraction under strict analyzers** may surface many warnings in existing services → budget time in phase 1;
-  narrow suppressions with justification only.
+- **Extraction under strict analyzers** may surface many warnings in existing services → done as a separate,
+  required task (`plans/2026-10-16-core-services-migration.md`), not blocking phase 1; all findings fixed, narrow
+  suppressions with justification only.
 - **Effective-value parity** with WS depends on replicating `LayoutListSettingReader` including its known quirks
   (§10 of the architecture reference) → golden tests; quirks documented, not fixed in `sm`.
 - **Catalogue regex** may miss unusual call shapes → report "unparsed" calls rather than drop them.

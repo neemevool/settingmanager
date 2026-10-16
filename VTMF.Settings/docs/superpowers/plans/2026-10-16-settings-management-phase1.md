@@ -30,6 +30,8 @@
 - Never edit `<db5>\versions.csv` (maintained by that repo's pre-commit hook).
 - Existing namespaces `VTMF.Settings.Services`, `VTMF.Settings.Entities`, `VTMF.Settings.Models` are kept when files move to Core. New code uses `VTMF.Settings.Core.Sm` (Core) and `VTMF.Settings.Mcp` (MCP).
 - Integration tests need Docker Desktop running (Testcontainers).
+- Build and test **only** through the repo wrapper, run from `<root>` (a hook blocks raw `dotnet build` / `dotnet test`): `pwsh -NoProfile -File ./eng/verify.ps1 -Mode build`, `pwsh -NoProfile -File ./eng/verify.ps1 -Mode test -Target VTMF.Settings.Tests/VTMF.Settings.Tests.csproj [-Filter "<filter>"]`, `pwsh -NoProfile -File ./eng/verify.ps1 -Mode warnings -Target <project>`. `dotnet new` / `add` / `sln` / `run` are allowed. An expected "FAIL" in a step means the wrapper prints `BUILD FAILED` or `TESTS FAILED`.
+- Every test class that uses the SQL container carries `[Trait("Category", "Integration")]`. The `SubagentStop` gate (`-Mode gate`) runs only `Category!=Integration`, so before finishing a task also run `pwsh -NoProfile -File ./eng/verify.ps1 -Mode test -Target VTMF.Settings.Tests/VTMF.Settings.Tests.csproj` (all tests, needs Docker) and report its result.
 
 ## Review Focus
 
@@ -52,6 +54,7 @@
 - Modify: `<ui>\Services\ServiceCollectionExtensions.cs`
 - Modify: `<root>\Dockerfile` (copy Core)
 - Create: `<root>\VTMF.Settings.Tests\VTMF.Settings.Tests.csproj`
+- Modify: `<root>\eng\verify.config.json` (add the test project to `targets`)
 - Test: `<root>\VTMF.Settings.Tests\Core\SqlConnectionParametersTests.cs`
 
 **Interfaces:**
@@ -113,6 +116,16 @@ Remove-Item VTMF.Settings.Tests\UnitTest1.cs
 
 The tests use the xUnit **v2** API (`IAsyncLifetime` with `Task`). If the template produced xUnit v3 packages (`xunit.v3`), replace them with `xunit` 2.9.3 + `xunit.runner.visualstudio`.
 
+Add the test project to `targets` in `<root>\eng\verify.config.json` so the wrapper and the `SubagentStop` gate build and test it (keep the existing entries and order):
+
+```json
+  "targets": [
+    "VTMF.Settings/VTMF.Settings.csproj",
+    "VTMF.SQLInstaller/VTMF.SQLInstaller.csproj",
+    "VTMF.Settings.Tests/VTMF.Settings.Tests.csproj"
+  ],
+```
+
 - [ ] **Step 3: Write the failing test**
 
 `<root>\VTMF.Settings.Tests\Core\SqlConnectionParametersTests.cs`:
@@ -168,7 +181,7 @@ public sealed class SqlConnectionParametersTests
 
 - [ ] **Step 4: Run test to verify it fails**
 
-Run: `dotnet test C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Tests`
+Run: `pwsh -NoProfile -File ./eng/verify.ps1 -Mode test -Target VTMF.Settings.Tests/VTMF.Settings.Tests.csproj`
 Expected: build FAIL — `SqlConnectionParameters` / `AddSqlConnectionParameters` not found (Core is still empty).
 
 - [ ] **Step 5: Move connection classes and add the registration extension**
@@ -235,19 +248,19 @@ COPY VTMF.Settings.Core VTMF.Settings.Core
 
 - [ ] **Step 7: Build and fix analyzer findings in Core**
 
-Run: `dotnet build C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings\VTMF.Settings.sln`
+Run: `pwsh -NoProfile -File ./eng/verify.ps1 -Mode build`
 Expected: success. If Core reports analyzer errors in the moved files (e.g. CA1056 for `KeyReceiverUrl`, CA1305), fix them behaviour-preservingly or suppress at member level with a justification (Global Constraints).
 
 - [ ] **Step 8: Run tests to verify they pass**
 
-Run: `dotnet test C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Tests`
+Run: `pwsh -NoProfile -File ./eng/verify.ps1 -Mode test -Target VTMF.Settings.Tests/VTMF.Settings.Tests.csproj`
 Expected: 3 passed.
 
 - [ ] **Step 9: Commit**
 
 ```powershell
 cd C:\PROJECTS\VTMF\Settingmanager
-git add VTMF.Settings.Core VTMF.Settings.Tests VTMF.Settings\VTMF.Settings.csproj VTMF.Settings\VTMF.Settings.sln VTMF.Settings\Services Dockerfile
+git add VTMF.Settings.Core VTMF.Settings.Tests VTMF.Settings\VTMF.Settings.csproj VTMF.Settings\VTMF.Settings.sln VTMF.Settings\Services Dockerfile eng\verify.config.json
 git commit -m "feat(core): extract connection configuration into VTMF.Settings.Core"
 ```
 
@@ -291,6 +304,7 @@ using VTMF.Settings.Tests.Sql;
 
 namespace VTMF.Settings.Tests.Sm;
 
+[Trait("Category", "Integration")]
 [Collection(SqlCollection.Name)]
 public sealed class ModuleInfoTests(SqlServerFixture fixture)
 {
@@ -549,7 +563,7 @@ Add to `VTMF.Settings.Tests.csproj`:
 
 - [ ] **Step 3: Run test to verify it fails**
 
-Run: `dotnet test C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Tests --filter FullyQualifiedName~ModuleInfoTests`
+Run: `pwsh -NoProfile -File ./eng/verify.ps1 -Mode test -Target VTMF.Settings.Tests/VTMF.Settings.Tests.csproj -Filter "FullyQualifiedName~ModuleInfoTests"`
 Expected: build FAIL — `SmClient`, `SmException`, `SmErrorCodes` not found.
 
 - [ ] **Step 4: Write the SQL module skeleton**
@@ -949,7 +963,7 @@ public static class SmServiceCollectionExtensions
 
 - [ ] **Step 6: Run tests to verify they pass**
 
-Run: `dotnet test C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Tests --filter FullyQualifiedName~ModuleInfoTests`
+Run: `pwsh -NoProfile -File ./eng/verify.ps1 -Mode test -Target VTMF.Settings.Tests/VTMF.Settings.Tests.csproj -Filter "FullyQualifiedName~ModuleInfoTests"`
 Expected: 3 passed (first run pulls the SQL Server 2025 image; allow several minutes).
 
 - [ ] **Step 7: Commit (two repos)**
@@ -985,6 +999,7 @@ using VTMF.Settings.Tests.Sql;
 
 namespace VTMF.Settings.Tests.Sm;
 
+[Trait("Category", "Integration")]
 [Collection(SqlCollection.Name)]
 public sealed class ProcessAndTableTests(SqlServerFixture fixture)
 {
@@ -1051,7 +1066,7 @@ public sealed class ProcessAndTableTests(SqlServerFixture fixture)
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `dotnet test C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Tests --filter FullyQualifiedName~ProcessAndTableTests`
+Run: `pwsh -NoProfile -File ./eng/verify.ps1 -Mode test -Target VTMF.Settings.Tests/VTMF.Settings.Tests.csproj -Filter "FullyQualifiedName~ProcessAndTableTests"`
 Expected: build FAIL — `GetProcessesAsync` / `GetTablesAsync` not defined.
 
 - [ ] **Step 3: Write the procedures**
@@ -1149,7 +1164,7 @@ Insert into `SmClient` (before `QueryAsync`):
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `dotnet test C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Tests --filter FullyQualifiedName~ProcessAndTableTests`
+Run: `pwsh -NoProfile -File ./eng/verify.ps1 -Mode test -Target VTMF.Settings.Tests/VTMF.Settings.Tests.csproj -Filter "FullyQualifiedName~ProcessAndTableTests"`
 Expected: 5 passed.
 
 - [ ] **Step 6: Commit (two repos)**
@@ -1184,6 +1199,7 @@ using VTMF.Settings.Tests.Sql;
 
 namespace VTMF.Settings.Tests.Sm;
 
+[Trait("Category", "Integration")]
 [Collection(SqlCollection.Name)]
 public sealed class GetSettingsTests(SqlServerFixture fixture)
 {
@@ -1250,7 +1266,7 @@ public sealed class GetSettingsTests(SqlServerFixture fixture)
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `dotnet test C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Tests --filter FullyQualifiedName~GetSettingsTests`
+Run: `pwsh -NoProfile -File ./eng/verify.ps1 -Mode test -Target VTMF.Settings.Tests/VTMF.Settings.Tests.csproj -Filter "FullyQualifiedName~GetSettingsTests"`
 Expected: build FAIL — `GetSettingsAsync` not defined.
 
 - [ ] **Step 3: Write the procedure**
@@ -1334,7 +1350,7 @@ GO
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `dotnet test C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Tests --filter FullyQualifiedName~GetSettingsTests`
+Run: `pwsh -NoProfile -File ./eng/verify.ps1 -Mode test -Target VTMF.Settings.Tests/VTMF.Settings.Tests.csproj -Filter "FullyQualifiedName~GetSettingsTests"`
 Expected: 13 passed.
 
 - [ ] **Step 6: Commit (two repos)**
@@ -1371,6 +1387,7 @@ using VTMF.Settings.Tests.Sql;
 
 namespace VTMF.Settings.Tests.Sm;
 
+[Trait("Category", "Integration")]
 [Collection(SqlCollection.Name)]
 public sealed class EffectiveSettingsTests(SqlServerFixture fixture)
 {
@@ -1456,7 +1473,7 @@ public sealed class EffectiveSettingsTests(SqlServerFixture fixture)
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `dotnet test C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Tests --filter FullyQualifiedName~EffectiveSettingsTests`
+Run: `pwsh -NoProfile -File ./eng/verify.ps1 -Mode test -Target VTMF.Settings.Tests/VTMF.Settings.Tests.csproj -Filter "FullyQualifiedName~EffectiveSettingsTests"`
 Expected: build FAIL — `GetEffectiveSettingsAsync` not defined.
 
 - [ ] **Step 3: Write the procedure**
@@ -1677,7 +1694,7 @@ Add `using System.Data;` is already present. Insert:
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `dotnet test C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Tests --filter FullyQualifiedName~EffectiveSettingsTests`
+Run: `pwsh -NoProfile -File ./eng/verify.ps1 -Mode test -Target VTMF.Settings.Tests/VTMF.Settings.Tests.csproj -Filter "FullyQualifiedName~EffectiveSettingsTests"`
 Expected: 6 passed.
 
 - [ ] **Step 6: Commit (two repos)**
@@ -1715,6 +1732,7 @@ using VTMF.Settings.Tests.Sql;
 
 namespace VTMF.Settings.Tests.Sm;
 
+[Trait("Category", "Integration")]
 [Collection(SqlCollection.Name)]
 public sealed class SettingsUsageTests(SqlServerFixture fixture)
 {
@@ -1768,7 +1786,7 @@ public sealed class SettingsUsageTests(SqlServerFixture fixture)
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `dotnet test C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Tests --filter FullyQualifiedName~SettingsUsageTests`
+Run: `pwsh -NoProfile -File ./eng/verify.ps1 -Mode test -Target VTMF.Settings.Tests/VTMF.Settings.Tests.csproj -Filter "FullyQualifiedName~SettingsUsageTests"`
 Expected: build FAIL — `GetSettingsUsageAsync` not defined.
 
 - [ ] **Step 3: Write the SQL**
@@ -1974,7 +1992,7 @@ If `REGEXP_SUBSTR`/`REGEXP_COUNT` raise an error at compatibility level 150, **s
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `dotnet test C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Tests --filter FullyQualifiedName~SettingsUsageTests`
+Run: `pwsh -NoProfile -File ./eng/verify.ps1 -Mode test -Target VTMF.Settings.Tests/VTMF.Settings.Tests.csproj -Filter "FullyQualifiedName~SettingsUsageTests"`
 Expected: 3 passed.
 
 - [ ] **Step 6: Commit (two repos)**
@@ -2008,6 +2026,7 @@ using VTMF.Settings.Tests.Sql;
 
 namespace VTMF.Settings.Tests.Sm;
 
+[Trait("Category", "Integration")]
 [Collection(SqlCollection.Name)]
 public sealed class LegacyEnvRowsTests(SqlServerFixture fixture)
 {
@@ -2038,7 +2057,7 @@ public sealed class LegacyEnvRowsTests(SqlServerFixture fixture)
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `dotnet test C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Tests --filter FullyQualifiedName~LegacyEnvRowsTests`
+Run: `pwsh -NoProfile -File ./eng/verify.ps1 -Mode test -Target VTMF.Settings.Tests/VTMF.Settings.Tests.csproj -Filter "FullyQualifiedName~LegacyEnvRowsTests"`
 Expected: build FAIL — `GetLegacyEnvRowsAsync` not defined.
 
 - [ ] **Step 3: Write the procedure**
@@ -2115,7 +2134,7 @@ GO
 
 - [ ] **Step 5: Run the whole test suite**
 
-Run: `dotnet test C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Tests`
+Run: `pwsh -NoProfile -File ./eng/verify.ps1 -Mode test -Target VTMF.Settings.Tests/VTMF.Settings.Tests.csproj`
 Expected: all tests pass (Tasks 1–7).
 
 - [ ] **Step 6: Commit (two repos)**
@@ -2138,6 +2157,7 @@ git -C C:\PROJECTS\VTMF\Settingmanager commit -m "feat(core): SmClient legacy en
 - Create: `<root>\VTMF.Settings.Mcp\ToolResult.cs`
 - Create: `<root>\VTMF.Settings.Mcp\Tools\SettingsReadTools.cs`
 - Create: `<root>\VTMF.Settings.Mcp\appsettings.json`
+- Modify: `<root>\eng\verify.config.json` (add the MCP project to `targets`)
 - Test: `<root>\VTMF.Settings.Tests\Mcp\McpTransportOptionTests.cs`
 - Test: `<root>\VTMF.Settings.Tests\Mcp\SettingsReadToolsTests.cs`
 
@@ -2193,6 +2213,8 @@ dotnet add VTMF.Settings.Tests reference VTMF.Settings.Mcp\VTMF.Settings.Mcp.csp
 
 If `dotnet add package ModelContextProtocol` reports no stable version, rerun both MCP package commands with `--prerelease`.
 
+Append `"VTMF.Settings.Mcp/VTMF.Settings.Mcp.csproj"` as the last entry of `targets` in `<root>\eng\verify.config.json`.
+
 `<root>\VTMF.Settings.Mcp\appsettings.json`:
 
 ```json
@@ -2235,6 +2257,7 @@ using VTMF.Settings.Tests.Sql;
 
 namespace VTMF.Settings.Tests.Mcp;
 
+[Trait("Category", "Integration")]
 [Collection(SqlCollection.Name)]
 public sealed class SettingsReadToolsTests(SqlServerFixture fixture)
 {
@@ -2308,7 +2331,7 @@ public sealed class SettingsReadToolsTests(SqlServerFixture fixture)
 
 - [ ] **Step 3: Run tests to verify they fail**
 
-Run: `dotnet test C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Tests --filter FullyQualifiedName~Mcp`
+Run: `pwsh -NoProfile -File ./eng/verify.ps1 -Mode test -Target VTMF.Settings.Tests/VTMF.Settings.Tests.csproj -Filter "FullyQualifiedName~Mcp"`
 Expected: build FAIL — `McpTransportOption`, `SettingsReadTools`, `ToolErrorCodes` not defined.
 
 - [ ] **Step 4: Implement transport option and tool result**
@@ -2526,13 +2549,13 @@ static void AddConfiguration(IConfigurationBuilder configuration)
 
 - [ ] **Step 7: Run tests to verify they pass**
 
-Run: `dotnet test C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Tests --filter FullyQualifiedName~Mcp`
+Run: `pwsh -NoProfile -File ./eng/verify.ps1 -Mode test -Target VTMF.Settings.Tests/VTMF.Settings.Tests.csproj -Filter "FullyQualifiedName~Mcp"`
 Expected: 12 passed (5 transport + 7 tools).
 
 - [ ] **Step 8: Smoke-test stdio startup**
 
 ```powershell
-dotnet build C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Mcp
+pwsh -NoProfile -File ./eng/verify.ps1 -Mode build -Target VTMF.Settings.Mcp/VTMF.Settings.Mcp.csproj
 '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}' | dotnet C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Mcp\bin\Debug\net10.0\VTMF.Settings.Mcp.dll
 ```
 
@@ -2541,7 +2564,7 @@ Expected: one JSON line on stdout containing `"serverInfo"`; no log lines on std
 - [ ] **Step 9: Commit**
 
 ```powershell
-git -C C:\PROJECTS\VTMF\Settingmanager add VTMF.Settings.Mcp VTMF.Settings.Tests VTMF.Settings\VTMF.Settings.sln
+git -C C:\PROJECTS\VTMF\Settingmanager add VTMF.Settings.Mcp VTMF.Settings.Tests VTMF.Settings\VTMF.Settings.sln eng\verify.config.json
 git -C C:\PROJECTS\VTMF\Settingmanager commit -m "feat(mcp): VTMF.Settings.Mcp server with read tools"
 ```
 
@@ -2605,6 +2628,8 @@ In `<ui>\install.xml`, directly after the closing `</set>` of `<set name="base">
   </set>
 ```
 
+Keep the `$/Sawmill/database5/...` form even though TFVC is retired. The installer maps it onto the local `database5` git checkout (`FileUtils` strips `$/` and `SqlScriptsPrefix`), takes script versions from `versions.csv`, and client install history is keyed by these paths, so all sets use one path convention. A script gets its `versions.csv` entry only from the `database5` pre-commit hook, so it must be committed there (Tasks 2–7) before the installer sees it. Nothing is checked into TFVC.
+
 - [ ] **Step 4: Usage docs**
 
 Append to `<ui>\README.md`:
@@ -2644,151 +2669,12 @@ docker compose build vtmf-settings
 
 Expected: both images build; MCP logs show `Now listening on: http://0.0.0.0:8080`. Then `docker compose stop vtmf-settings-mcp`.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Final verification**
 
-```powershell
-git -C C:\PROJECTS\VTMF\Settingmanager add Dockerfile.mcp compose.yaml VTMF.Settings\install.xml VTMF.Settings\README.md
-git -C C:\PROJECTS\VTMF\Settingmanager commit -m "chore: compose service, installer set and docs for the settings MCP server"
-```
+Run: `pwsh -NoProfile -File ./eng/verify.ps1 -Mode gate` → Expected: `OK (gate)`.
+Run: `pwsh -NoProfile -File ./eng/verify.ps1 -Mode test -Target VTMF.Settings.Tests/VTMF.Settings.Tests.csproj` → Expected: `OK (test)` (all tests incl. integration; Docker running).
 
----
-
-### Task 10: Extract existing Entities and Services into Core
-
-Completes the spec's Core extraction (§6). The UI must behave exactly as before; only file locations, project references and analyzer-driven fixes change.
-
-**Files:**
-- Move: `<ui>\Entities\*.cs` → `<root>\VTMF.Settings.Core\Entities\`
-- Move: `<ui>\Models\SettingTreeNode.cs` → `<root>\VTMF.Settings.Core\Models\SettingTreeNode.cs`
-- Move: `<ui>\Services\*.cs` except `ToastServiceExtensions.cs` and `ServiceCollectionExtensions.cs` → `<root>\VTMF.Settings.Core\Services\`
-- Create: `<root>\VTMF.Settings.Core\Services\SettingsServiceCollectionExtensions.cs`
-- Modify: `<ui>\Services\ServiceCollectionExtensions.cs`
-- Test: `<root>\VTMF.Settings.Tests\Core\SettingsServiceRegistrationTests.cs`
-
-**Interfaces:**
-- Produces: `IServiceCollection AddSettingsCoreServices(this IServiceCollection services)` (namespace `VTMF.Settings.Services`) registering `ISettingsService, ISettingsMetadataService, IFeatureService, ISchedulerService, IWorkerService, IWikiService, IWikiImageService, IFeatureManagementService` as singletons.
-
-- [ ] **Step 1: Write the failing test**
-
-`<root>\VTMF.Settings.Tests\Core\SettingsServiceRegistrationTests.cs`:
-
-```csharp
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-using VTMF.Settings.Services;
-
-namespace VTMF.Settings.Tests.Core;
-
-public sealed class SettingsServiceRegistrationTests
-{
-    [Fact]
-    public void AddSettingsCoreServices_ResolvesAllServices()
-    {
-        var services = new ServiceCollection()
-            .AddSingleton<IConfiguration>(new ConfigurationBuilder().Build())
-            .AddLogging();
-
-        services.AddSqlConnectionParameters().AddSettingsCoreServices();
-        using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true });
-
-        Assert.NotNull(provider.GetRequiredService<ISettingsService>());
-        Assert.NotNull(provider.GetRequiredService<ISettingsMetadataService>());
-        Assert.NotNull(provider.GetRequiredService<IFeatureService>());
-        Assert.NotNull(provider.GetRequiredService<ISchedulerService>());
-        Assert.NotNull(provider.GetRequiredService<IWorkerService>());
-        Assert.NotNull(provider.GetRequiredService<IWikiService>());
-        Assert.NotNull(provider.GetRequiredService<IWikiImageService>());
-        Assert.NotNull(provider.GetRequiredService<IFeatureManagementService>());
-    }
-}
-```
-
-Add `dotnet add C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Tests package Microsoft.Extensions.Logging` if `AddLogging` is not resolvable.
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `dotnet test C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Tests --filter FullyQualifiedName~SettingsServiceRegistrationTests`
-Expected: build FAIL — `ISettingsService` / `AddSettingsCoreServices` not found from Core.
-
-- [ ] **Step 3: Move the files**
-
-```powershell
-cd C:\PROJECTS\VTMF\Settingmanager
-New-Item -ItemType Directory -Force VTMF.Settings.Core\Entities, VTMF.Settings.Core\Models | Out-Null
-Get-ChildItem VTMF.Settings\Entities\*.cs | ForEach-Object { git mv $_.FullName "VTMF.Settings.Core\Entities\$($_.Name)" }
-git mv VTMF.Settings\Models\SettingTreeNode.cs VTMF.Settings.Core\Models\SettingTreeNode.cs
-Get-ChildItem VTMF.Settings\Services\*.cs |
-  Where-Object { $_.Name -notin 'ToastServiceExtensions.cs', 'ServiceCollectionExtensions.cs' } |
-  ForEach-Object { git mv $_.FullName "VTMF.Settings.Core\Services\$($_.Name)" }
-```
-
-`ApiSettingsService.cs.example` stays in the UI project (not compiled).
-
-- [ ] **Step 4: Registration extension in Core; UI delegates to it**
-
-`<root>\VTMF.Settings.Core\Services\SettingsServiceCollectionExtensions.cs`:
-
-```csharp
-using Microsoft.Extensions.DependencyInjection;
-
-namespace VTMF.Settings.Services;
-
-public static class SettingsServiceCollectionExtensions
-{
-    public static IServiceCollection AddSettingsCoreServices(this IServiceCollection services)
-    {
-        ArgumentNullException.ThrowIfNull(services);
-
-        services.AddSingleton<ISettingsService, SettingsService>();
-        services.AddSingleton<ISettingsMetadataService, SettingMetaService>();
-        services.AddSingleton<IFeatureService, FeatureService>();
-        services.AddSingleton<ISchedulerService, SchedulerService>();
-        services.AddSingleton<IWorkerService, WorkerService>();
-        services.AddSingleton<IWikiService, WikiService>();
-        services.AddSingleton<IWikiImageService, WikiImageService>();
-        services.AddSingleton<IFeatureManagementService, FeatureManagementService>();
-        return services;
-    }
-}
-```
-
-Replace the body of `AddSettingsServices` in `<ui>\Services\ServiceCollectionExtensions.cs` with:
-
-```csharp
-        services.AddSqlConnectionParameters();
-        services.AddSettingsCoreServices();
-        return services;
-```
-
-- [ ] **Step 5: Remove UI-only usings from moved files**
-
-Delete these unused directives (they reference ASP.NET Core / UI namespaces Core does not have):
-- `Services\SettingsService.cs`: `using Microsoft.AspNetCore.Http.HttpResults;`, `using Microsoft.IdentityModel.Tokens;`, `using VTMF.Settings.Components.Pages;`, `using VTMF.Settings.Components.SettingsManagement;`
-- `Entities\ProcessType.cs`: `using Microsoft.AspNetCore.Http.HttpResults;`, `using System.Diagnostics.Metrics;`, `using System.Runtime.Intrinsics.X86;`, `using static System.Net.Mime.MediaTypeNames;`
-- `Services\SettingMetaService.cs`: `using System.Reflection.Metadata;`
-
-- [ ] **Step 6: Build Core and fix analyzer findings**
-
-Run: `dotnet build C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Core 2>&1 | Select-String -Pattern 'error (CA|IDE|CS)\d+' | ForEach-Object { ($_ -split ' ')[-1] } | Group-Object | Sort-Object Count -Descending`
-
-Then fix by rule, behaviour-preserving only:
-- Missing types/packages (CS0246) → add the package to Core (e.g. `System.ComponentModel.Annotations` is in-box; `Microsoft.Extensions.Logging.Abstractions` already referenced).
-- Mechanical rules (CA1305/CA1307/CA1310 culture/ordinal, CA1822 static, CA1849/CA2007 async, CA1860 `Count > 0`, IDE unused usings) → fix in code.
-- CA2100 on dynamic SQL built from validated table names → `[SuppressMessage("Security", "CA2100:Review SQL queries for security vulnerabilities", Justification = "Table name validated by regex and wrapped in brackets.")]` on the method.
-- Never change SQL text, method signatures used by the UI, or control flow.
-
-**Escalation:** if more than 150 diagnostics remain after the mechanical fixes, stop and report the counts per rule ID — the user decides how to proceed.
-
-- [ ] **Step 7: Build the solution and run all tests**
-
-Run: `dotnet build C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings\VTMF.Settings.sln` → Expected: 0 errors.
-Run: `dotnet test C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Tests` → Expected: all pass.
-
-- [ ] **Step 8: Smoke-test the UI**
-
-Run: `dotnet run --project C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings --launch-profile http`, open `http://localhost:5045`, open the client list and one client's Settings Manager page. Expected: pages load as before (requires configured user secrets). Stop the app.
-
-- [ ] **Step 9: Commit and record task history**
+- [ ] **Step 7: Commit and record task history**
 
 Append to `<ui>\TASKHISTORY.md` (per project CLAUDE.md, task content as-is):
 
@@ -2801,6 +2687,14 @@ following docs/superpowers/plans/2026-10-16-settings-management-phase1.md.
 ```
 
 ```powershell
-git -C C:\PROJECTS\VTMF\Settingmanager add -A VTMF.Settings VTMF.Settings.Core VTMF.Settings.Tests
-git -C C:\PROJECTS\VTMF\Settingmanager commit -m "refactor(core): move entities and services into VTMF.Settings.Core"
+git -C C:\PROJECTS\VTMF\Settingmanager add Dockerfile.mcp compose.yaml VTMF.Settings\install.xml VTMF.Settings\README.md
+git -C C:\PROJECTS\VTMF\Settingmanager commit -m "chore: compose service, installer set and docs for the settings MCP server"
 ```
+
+`TASKHISTORY.md` already had uncommitted changes before this work; leave it out of the commit and tell the user it was updated.
+
+---
+
+## Follow-up (separate task, required)
+
+Moving the remaining Entities and Services into Core under the strict analyzer settings is its own task: `docs/superpowers/plans/2026-10-16-core-services-migration.md`. Phase 1 does not depend on it.

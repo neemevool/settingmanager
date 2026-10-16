@@ -1,6 +1,6 @@
 # VTMF Settings Architecture — Design-Time Reference
 
-> **Status:** v1.1 — 2026-10-14. Initial analysis, reviewed and corrected by the product owner, produced from source of VTMF.Settings, VTMF.Terminal.SPA,
+> **Status:** v1.2 — 2026-10-16 (TFVC retired; WS `ServerSetting` filtering clarified). v1.1 — 2026-10-14. Initial analysis, reviewed and corrected by the product owner, produced from source of VTMF.Settings, VTMF.Terminal.SPA,
 > VTMF.Terminal.WS and the SQL repository `database5`. Details are added incrementally whenever a new tool,
 > skill or agent is designed.
 
@@ -203,9 +203,12 @@ Scope in WS: `SettingsController` and `InfoController` (plus `ProcessesControlle
    - Candidate tables: `{processName}{suffix}`, `{SETTINGPROCEDURES alias}{suffix}`, `{infotype}`; first existing wins.
    - `Readers\LayoutListSettingReader.Read`: base rows `workercode='ALL'` (non-empty, by `ordernr`) → overlay
      `{table}{environment}` (if env ≠ `wterminal`; `Setting` overrides by NAME, `SettingGroup` added if NAME+VALUE new)
-     → overlay `{table}{language}`.
+     → overlay `{table}{language}`. Only types `Setting` and `SettingGroup` are read (case-sensitive; NULL type
+     counts as `Setting`), so `ServerSetting` and `ListSetting` rows never reach the frontend on this path.
    - Then `dbo.Get{table}Additional` (if exists) is merged in.
 3. Else alias procedure `Get{alias}{suffix}Info`; missing → empty result (no error).
+
+`Get…Info` procedures must filter `ServerSetting` rows themselves; a procedure that returns them is a bug.
 
 Procedure result shape: first row `VALUE='Response'`; subsequent rows `VALUE`=setting name, `LISTVALUE`=value
 (different column mapping than the table path).
@@ -384,11 +387,12 @@ VTMF.Settings apply code is complex and fragile and should not be the basis.
 
 ### 8.3 Procedure installation
 `Components/Pages/Installer.razor` + `VTMF.SQLInstaller`. `install.xml` defines sets (`base`, `directocore`, process
-sets…) pointing at `database5` folders. Script version from TFVC (or `versions.csv`, maintained by a git pre-commit
-hook — never edited manually); installed version from `dbo.SetupCheckInstall`; installs newer scripts batch-by-batch
+sets…) pointing at `database5` folders. Script version from `versions.csv` in the `database5` git repo (maintained by its pre-commit hook — never edited
+manually; TFVC is retired); installed version from `dbo.SetupCheckInstall`; installs newer scripts batch-by-batch
 and records via `SetupRegisterInstallation`. Validate mode = dry run.
-Direction: TFVC is being phased out — `install.xml` and versions will come from the git repo (`database5`) in the
-near future.
+`install.xml` keeps the `$/Sawmill/database5/...` source paths: the installer maps them onto the local git checkout,
+and client install history is keyed by them (a changed path would look like an uninstalled script). New sets use
+the same form. No installs or updates come from TFVC any more.
 
 ### 8.4 Client customization mechanisms
 - **Alternative module folders** defining the same procedure names (e.g. `spastockreturn/` vs
@@ -481,4 +485,4 @@ Requirements derived from the analysis, grouped by the roadmap items.
 | 6 | Defaults | Stay in code per call site; no separate default layer |
 | 7 | Settings-management implementation | Stored procedures preferred over inline SQL in VTMF.Settings |
 | 8 | Feature installation | New stored-procedure tool; metabase is the feature store |
-| 9 | Procedure source | `install.xml` and versions move from TFVC to git |
+| 9 | Procedure source | `database5` git repo + `versions.csv`; TFVC retired, `$/...` paths kept as install-history keys |
