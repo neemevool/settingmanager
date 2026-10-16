@@ -1,0 +1,13 @@
+using Microsoft.Extensions.DependencyInjection;
+
+namespace VTMF.Settings.Core.Sm;
+
+public static class SmServiceCollectionExtensions
+{
+    public static IServiceCollection AddSmClient(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        services.AddSingleton<SmClient>();
+        return services;
+    }
+}

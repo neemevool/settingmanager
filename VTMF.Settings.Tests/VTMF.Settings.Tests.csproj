@@ -22,6 +22,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Update="TestData\**\*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\VTMF.Settings.Core\VTMF.Settings.Core.csproj" />
     <ProjectReference Include="..\VTMF.SQLInstaller\VTMF.SQLInstaller.csproj" />
   </ItemGroup>
