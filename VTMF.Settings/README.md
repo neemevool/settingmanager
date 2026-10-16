@@ -34,3 +34,24 @@ SQLCONNECTIONPARAMETERS__1__SERVER=Server=tcp:a320ladu.pilveserv.eu,9999;Initial
 SQLCONNECTIONPARAMETERS__1__USERID=henryvool
 SQLCONNECTIONPARAMETERS__1__PASSWORD=**********
 ```
+
+## Settings management MCP server (VTMF.Settings.Mcp)
+
+Read-only MCP tools over the `sm` procedures (phase 1). Each client database needs the
+`settingsmanagement` install set (Installer page) before its tools work; `module_status` reports it.
+
+Connections are configured exactly like VTMF.Settings (`SqlConnectionParameters` via user secrets or
+environment variables / `settings.env`). Modifications are attributed to the SQL login of the connection.
+
+Local (stdio) — build once, then register the built dll (not `dotnet run`, whose build output would corrupt stdio):
+
+    dotnet build VTMF.Settings.Mcp
+    claude mcp add vtmf-settings -- dotnet C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Mcp\bin\Debug\net10.0\VTMF.Settings.Mcp.dll
+
+Docker (HTTP):
+
+    docker compose up -d vtmf-settings-mcp
+    claude mcp add --transport http vtmf-settings http://localhost:8081/mcp
+
+Tools: list_clients, module_status, list_processes, list_tables, get_settings, get_effective_settings,
+settings_usage, legacy_env_rows. ServerSetting values are always masked.

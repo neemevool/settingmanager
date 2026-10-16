@@ -1,0 +1,15 @@
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS builder
+WORKDIR /src
+
+COPY VTMF.SQLInstaller VTMF.SQLInstaller
+COPY VTMF.Settings.Core VTMF.Settings.Core
+COPY VTMF.Settings.Mcp VTMF.Settings.Mcp
+
+RUN dotnet restore "VTMF.Settings.Mcp/VTMF.Settings.Mcp.csproj"
+RUN dotnet publish "VTMF.Settings.Mcp/VTMF.Settings.Mcp.csproj" -c Release -o /app/publish
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+WORKDIR /app
+COPY --from=builder /app/publish .
+EXPOSE 8080
+ENTRYPOINT ["dotnet", "VTMF.Settings.Mcp.dll", "--transport", "http", "--urls", "http://0.0.0.0:8080"]

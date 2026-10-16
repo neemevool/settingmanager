@@ -12,6 +12,10 @@
     <item name="maintenance" check="database" isfolder="true" type="database" source="$/Sawmill/database5/maintenance"/>
   </set>
 
+  <set name="settingsmanagement">
+    <item name="settingsmanagement" check="database" isfolder="true" type="database" source="$/Sawmill/database5/settingsmanagement"/>
+  </set>
+
   <set name="directocore">
     <item name="module" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/directomodule"/>
     <item name="elements" check="database" isfolder="true" type="database" source="$/Sawmill/database5/directo/dcelements"/>
