@@ -33,6 +33,11 @@ public sealed class SmClient(SqlConnectionProvider connections)
     public Task<IReadOnlyList<SmTable>> GetTablesAsync(string client, string process, CancellationToken cancellationToken = default) =>
         QueryAsync<SmTable>(client, "sm.GetTables", new { process }, cancellationToken);
 
+    public Task<IReadOnlyList<SmSettingRow>> GetSettingsAsync(
+        string client, string process, string table, string layer = "base", string? namePrefix = null,
+        CancellationToken cancellationToken = default) =>
+        QueryAsync<SmSettingRow>(client, "sm.GetSettings", new { process, table, layer, namePrefix }, cancellationToken);
+
     private async Task<IReadOnlyList<T>> QueryAsync<T>(string client, string procedure, object? parameters, CancellationToken cancellationToken)
     {
         await using var connection = connections.GetConnection(client);
