@@ -191,4 +191,4 @@ git -C C:\PROJECTS\VTMF\Settingmanager add -A VTMF.Settings\Entities VTMF.Settin
 git -C C:\PROJECTS\VTMF\Settingmanager commit -m "refactor(core): move entities and services into VTMF.Settings.Core"
 ```
 
-`TASKHISTORY.md` already had uncommitted changes before this work; leave it out of the commit and tell the user it was updated.
+`TASKHISTORY.md` is not tracked in git and was missing on 2026-10-16; if it still does not exist, ask the user before creating it. Do not commit it.

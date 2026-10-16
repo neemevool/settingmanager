@@ -2691,7 +2691,7 @@ git -C C:\PROJECTS\VTMF\Settingmanager add Dockerfile.mcp compose.yaml VTMF.Sett
 git -C C:\PROJECTS\VTMF\Settingmanager commit -m "chore: compose service, installer set and docs for the settings MCP server"
 ```
 
-`TASKHISTORY.md` already had uncommitted changes before this work; leave it out of the commit and tell the user it was updated.
+`TASKHISTORY.md` is not tracked in git and was missing on 2026-10-16; if it still does not exist, ask the user before creating it. Do not commit it.
 
 ---
 
