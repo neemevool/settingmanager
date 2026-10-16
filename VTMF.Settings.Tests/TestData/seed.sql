@@ -86,3 +86,14 @@ BEGIN
     select dbo.GetPSV(@psv, 'Other.Setting', 'o')
 END
 GO
+
+CREATE PROCEDURE dbo.GetVariantExtras @workercode nvarchar(250)
+AS
+BEGIN
+    declare @psv dbo.processSettings
+    insert into @psv select * from dbo.GetProcessSettingValues('tprocvariant', @workercode)
+    declare @unused nvarchar(30) = dbo.GetPSV(@psv, 'Unused.Setting', 'dflt')
+    declare @legacy nvarchar(30) = dbo.GetProcessSettingValue('tprocvariant','Unused.Setting',@workercode,'legacydflt')
+    select @unused, @legacy
+END
+GO

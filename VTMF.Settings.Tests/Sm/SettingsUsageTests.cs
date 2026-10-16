@@ -43,6 +43,19 @@ public sealed class SettingsUsageTests(SqlServerFixture fixture)
     }
 
     [Fact]
+    public async Task Usage_EmptyChildValueHidesParentForPsvButLegacyReadsMappedProcess()
+    {
+        var usage = await fixture.Sm.GetSettingsUsageAsync(Client, "tprocvariant", "Unused.");
+
+        Assert.Equal(
+            [
+                ("Unused.Setting", "GetVariantExtras", "legacy", "legacydflt", "1", "parent", 0),
+                ("Unused.Setting", "GetVariantExtras", "psv", "dflt", null, null, 0),
+            ],
+            usage.Select(u => (u.SettingName, u.ProcedureName, u.CallStyle, u.DefaultInCode, u.ConfiguredValue, u.ConfiguredIn, u.WorkerOverrides)).ToArray());
+    }
+
+    [Fact]
     public async Task Usage_RunsAtCompatibilityLevel150()
     {
         await fixture.ExecuteOnTestAsync("IF (SELECT compatibility_level FROM sys.databases WHERE name = DB_NAME()) <> 150 THROW 50000, 'fixture must run at level 150', 1;");

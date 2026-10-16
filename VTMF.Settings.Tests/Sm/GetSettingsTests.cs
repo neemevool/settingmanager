@@ -56,6 +56,7 @@ public sealed class GetSettingsTests(SqlServerFixture fixture)
     [InlineData("tproc", "DocumentListLayout", "env:WTERMINAL2", SmErrorCodes.InvalidLayer)]
     [InlineData("x;drop", "DocumentListLayout", "base", SmErrorCodes.InvalidName)]
     [InlineData("tproc", "Document ListLayout", "base", SmErrorCodes.InvalidName)]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "TableNameOfFortyCharactersXXXXXXXXXXXXXX", "base", SmErrorCodes.InvalidName)]
     [InlineData("nosuch", "DocumentListLayout", "base", SmErrorCodes.ProcessNotFound)]
     [InlineData("tproc", "Nope", "base", SmErrorCodes.TableNotFound)]
     [InlineData("tproc", "ServerProcessSettings", "env:wterminal2", SmErrorCodes.LayerNotSupported)]

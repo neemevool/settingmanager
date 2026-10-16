@@ -4,6 +4,7 @@ namespace VTMF.Settings.Core.Sm;
 
 public sealed class SmException : Exception
 {
+    private const int InvalidObjectName = 208;
     private const int CouldNotFindStoredProcedure = 2812;
 
     public SmException()
@@ -31,7 +32,8 @@ public sealed class SmException : Exception
 
     internal static bool TryTranslate(SqlException exception, out SmException translated)
     {
-        if (exception.Number == CouldNotFindStoredProcedure && exception.Message.Contains("'sm.", StringComparison.OrdinalIgnoreCase))
+        if (exception.Number is CouldNotFindStoredProcedure or InvalidObjectName
+            && exception.Message.Contains("'sm.", StringComparison.OrdinalIgnoreCase))
         {
             translated = new SmException(SmErrorCodes.ModuleNotInstalled,
                 "The settings management module (sm) is not installed in this client database. Install set 'settingsmanagement' with the VTMF.Settings installer.",
