@@ -129,7 +129,11 @@ public class DatabaseInstaller : IInstaller
             if (parts.Length >= 2 && int.TryParse(parts[1].Trim(), out var version))
             {
                 var filePath = parts[0].Trim().Trim('"');
-                _fileVersionCache[filePath] = version;
+                if (! _fileVersionCache.TryGetValue(filePath, out var existingVersion) || existingVersion < version)
+                {
+                    _fileVersionCache[filePath] = version;
+                }
+                
             }
         }
         return true;
