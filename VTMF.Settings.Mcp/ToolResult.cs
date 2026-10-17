@@ -38,5 +38,11 @@ public static class ToolResult
         {
             return Failure<T>(ToolErrorCodes.UnknownClient, ex.Message);
         }
+#pragma warning disable CA1031 // tool boundary: spec requires no exception escapes a tool
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return Failure<T>(SmErrorCodes.SmError, ex.Message);
+        }
+#pragma warning restore CA1031
     }
 }
