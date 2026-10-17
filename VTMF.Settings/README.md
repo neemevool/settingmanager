@@ -53,10 +53,13 @@ Docker (HTTP):
     docker compose up -d vtmf-settings-mcp
     claude mcp add --transport http vtmf-settings http://localhost:8081/mcp
 
-Tools: list_clients, module_status, list_processes, list_tables, get_settings, get_effective_settings,
+Tools: list_clients, module_status, install_module, list_processes, list_tables, get_settings, get_effective_settings,
 settings_usage, legacy_env_rows. ServerSetting values are always masked.
 
-Claude Code plugin (recommended). The repo is a plugin marketplace; the `vtmf-settings` plugin bundles the
+Claude Code plugin (recommended). The repo (github.com/neemevool/settingmanager) is private, so your git
+credentials must have access before `/plugin marketplace add` works (e.g. `gh auth login` then
+`gh auth setup-git`, or an SSH key / credential helper that works without prompting); otherwise the clone fails.
+The repo is a plugin marketplace; the `vtmf-settings` plugin bundles the
 HTTP MCP connection (`http://localhost:8081/mcp`) and the `sm-module` skill, which guides Claude to check
 and install the `sm` module for a client before working with it:
 
