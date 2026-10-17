@@ -17,7 +17,7 @@ public sealed class SettingsReadToolsTests(SqlServerFixture fixture)
         var result = Tools.ListClients();
 
         Assert.True(result.Ok);
-        Assert.Equal([SqlServerFixture.ClientName, SqlServerFixture.EmptyClientName], result.Data!.Order(StringComparer.Ordinal).Reverse().ToArray());
+        Assert.Equal(SqlServerFixture.AllClientNames.Order(StringComparer.Ordinal), result.Data!.Order(StringComparer.Ordinal));
     }
 
     [Fact]

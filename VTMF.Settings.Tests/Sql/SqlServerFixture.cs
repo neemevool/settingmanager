@@ -17,6 +17,13 @@ public sealed class SqlServerFixture : IAsyncLifetime
 {
     public const string ClientName = "test";
     public const string EmptyClientName = "empty";
+    public const string FreshClientName = "fresh";
+    public const string UpgradeClientName = "upgrade";
+    public const string ConcurrentClientName = "concurrent";
+    public const string BrokenClientName = "broken";
+
+    public static string[] AllClientNames { get; } =
+        [ClientName, EmptyClientName, FreshClientName, UpgradeClientName, ConcurrentClientName, BrokenClientName];
 
     private readonly MsSqlContainer _container = new MsSqlBuilder()
         .WithImage("mcr.microsoft.com/mssql/server:2025-latest")
@@ -26,30 +33,62 @@ public sealed class SqlServerFixture : IAsyncLifetime
 
     public SmClient Sm => new(Connections);
 
+    public SmScriptSet Scripts { get; private set; } = null!;
+
+    public SmInstaller Installer { get; private set; } = null!;
+
     public async Task InitializeAsync()
     {
         await _container.StartAsync();
         var master = _container.GetConnectionString();
 
         // Client databases may still run at an older compatibility level after the server upgrade.
-        await ExecuteAsync(master, "CREATE DATABASE smtest; ALTER DATABASE smtest SET COMPATIBILITY_LEVEL = 150; CREATE DATABASE smempty;");
+        await ExecuteAsync(master, "CREATE DATABASE smtest; ALTER DATABASE smtest SET COMPATIBILITY_LEVEL = 150; CREATE DATABASE smempty; CREATE DATABASE smfresh; CREATE DATABASE smupgrade; CREATE DATABASE smconcurrent; CREATE DATABASE smbroken;");
 
         var builder = new SqlConnectionStringBuilder(master);
         Connections = new SqlConnectionProvider(new Dictionary<string, SqlConnectionParameters>
         {
             [ClientName] = Parameters(builder, "smtest", ClientName),
             [EmptyClientName] = Parameters(builder, "smempty", EmptyClientName),
+            [FreshClientName] = Parameters(builder, "smfresh", FreshClientName),
+            [UpgradeClientName] = Parameters(builder, "smupgrade", UpgradeClientName),
+            [ConcurrentClientName] = Parameters(builder, "smconcurrent", ConcurrentClientName),
+            [BrokenClientName] = Parameters(builder, "smbroken", BrokenClientName),
         });
 
-        var test = Connections.GetConnectionString(ClientName);
-        foreach (var script in Database5Scripts.BaseScripts.Concat(Database5Scripts.SettingsManagementScripts))
-            await RunScriptFileAsync(test, script);
-        await RunScriptFileAsync(test, Path.Combine(AppContext.BaseDirectory, "TestData", "seed.sql"));
+        Scripts = SmScriptSet.LoadDefault();
+        Installer = new SmInstaller(Connections, Scripts);
+
+        foreach (var client in new[] { ClientName, FreshClientName, UpgradeClientName, ConcurrentClientName, BrokenClientName })
+        {
+            foreach (var script in Database5Scripts.BaseScripts)
+                await RunScriptFileAsync(Connections.GetConnectionString(client), script);
+        }
+
+        await Installer.InstallAsync(ClientName);
+        await RunScriptFileAsync(Connections.GetConnectionString(ClientName), Path.Combine(AppContext.BaseDirectory, "TestData", "seed.sql"));
+
+        await Installer.InstallAsync(UpgradeClientName);
+        await ExecuteAsync(Connections.GetConnectionString(UpgradeClientName), "UPDATE sm.moduleinfo SET version = 1");
+
+        // Deterministic failure of script 030: sm.GetProcesses already exists as a table.
+        var broken = Connections.GetConnectionString(BrokenClientName);
+        await ExecuteAsync(broken, "EXEC(N'CREATE SCHEMA sm')");
+        await ExecuteAsync(broken, "CREATE TABLE sm.GetProcesses (x int)");
     }
 
     public Task DisposeAsync() => _container.DisposeAsync().AsTask();
 
     public Task ExecuteOnTestAsync(string sql) => ExecuteAsync(Connections.GetConnectionString(ClientName), sql);
+
+    public async Task<T?> ScalarOnAsync<T>(string client, string sql)
+    {
+        await using var connection = new SqlConnection(Connections.GetConnectionString(client));
+        await connection.OpenAsync();
+        await using var command = new SqlCommand(sql, connection);
+        var value = await command.ExecuteScalarAsync();
+        return value is null or DBNull ? default : (T)value;
+    }
 
     private static SqlConnectionParameters Parameters(SqlConnectionStringBuilder master, string database, string client) => new()
     {

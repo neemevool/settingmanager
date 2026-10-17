@@ -13,7 +13,7 @@ public sealed class ModuleInfoTests(SqlServerFixture fixture)
         var status = await fixture.Sm.GetModuleStatusAsync(SqlServerFixture.ClientName);
 
         Assert.True(status.Installed);
-        Assert.Equal(1, status.Version);
+        Assert.Equal(fixture.Scripts.Version, status.Version);
     }
 
     [Fact]

@@ -8,6 +8,9 @@ public static class SmErrorCodes
     public const string ProcessNotFound = "process_not_found";
     public const string TableNotFound = "table_not_found";
     public const string LayerNotSupported = "layer_not_supported";
+    public const string InstallFailed = "install_failed";
+    public const string ModuleOutdated = "module_outdated";
+    public const string ModuleNewerThanTool = "module_newer_than_tool";
     public const string SmError = "sm_error";
 
     internal static string FromSqlErrorNumber(int number) => number switch

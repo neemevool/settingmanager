@@ -8,6 +8,8 @@ public static class SmServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
         services.AddSingleton<SmClient>();
+        services.AddSingleton(_ => SmScriptSet.LoadDefault());
+        services.AddSingleton<SmInstaller>();
         return services;
     }
 }

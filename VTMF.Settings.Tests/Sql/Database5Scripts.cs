@@ -19,7 +19,4 @@ internal static class Database5Scripts
         Path.Combine(Root, "settings", "038-function-GetPSVB.txt"),
     ];
 
-    public static IEnumerable<string> SettingsManagementScripts =>
-        Directory.GetFiles(Path.Combine(Root, "settingsmanagement"), "*.txt")
-            .OrderBy(Path.GetFileName, StringComparer.Ordinal);
 }

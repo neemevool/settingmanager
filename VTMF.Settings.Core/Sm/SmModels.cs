@@ -13,6 +13,15 @@ public sealed class SmModuleStatus
     public int? Version { get; init; }
 }
 
+public sealed class SmInstallResult
+{
+    public required string Client { get; init; }
+    public required string PreviousState { get; init; }
+    public int? PreviousVersion { get; init; }
+    public int InstalledVersion { get; init; }
+    public int ScriptsRun { get; init; }
+}
+
 public sealed class SmProcess
 {
     public string Name { get; set; } = string.Empty;
