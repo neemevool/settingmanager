@@ -84,7 +84,7 @@ public sealed class SmClient(SqlConnectionProvider connections, SmScriptSet scri
                 return;
             case SmModuleStates.NewerThanTool:
                 throw new SmException(SmErrorCodes.ModuleNewerThanTool,
-                    $"The sm module in client '{client}' is version {status.Version}, newer than this tool's version {status.AvailableVersion}. Update the VTMF.Settings MCP server image.");
+                    SmMessages.NewerThanTool(client, status.Version, status.AvailableVersion));
             case SmModuleStates.Outdated:
                 throw new SmException(SmErrorCodes.ModuleOutdated,
                     $"The sm module in client '{client}' is outdated (installed version {status.Version}, available {status.AvailableVersion}); call install_module for client '{client}'.");

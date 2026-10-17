@@ -31,7 +31,7 @@ public sealed class SmInstaller(SqlConnectionProvider connections, SmScriptSet s
             if (previousState == SmModuleStates.NewerThanTool)
             {
                 throw new SmException(SmErrorCodes.ModuleNewerThanTool,
-                    $"Module version {previous} in client '{client}' is newer than this tool's version {scripts.Version}.");
+                    SmMessages.NewerThanTool(client, previous, scripts.Version));
             }
 
             foreach (var script in scripts.Scripts)

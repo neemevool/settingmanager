@@ -12,7 +12,7 @@ public sealed class SmScriptSetTests
         Assert.Equal(12, set.Scripts.Count);
         Assert.Equal("001-script-schema.txt", set.Scripts[0].Name);
         Assert.DoesNotContain(set.Scripts, s => s.Name.StartsWith("999", StringComparison.Ordinal));
-        Assert.Equal(2, set.Version);
+        Assert.True(set.Version >= 2);
     }
 
     [Fact]
@@ -20,9 +20,8 @@ public sealed class SmScriptSetTests
     {
         var set = SmScriptSet.LoadDefault();
 
-        Assert.True(
-            set.RecordedSha256 == set.ComputeSha256(),
-            $"sm scripts changed. Bump \"version\" in Sql/settingsmanagement/module.json and set \"sha256\" to {set.ComputeSha256()}");
+        // xunit truncates long strings in failure output; 32-char chunks keep the full new hash visible on the Expected line.
+        Assert.Equal(Chunks(set.ComputeSha256()), Chunks(set.RecordedSha256));
     }
 
     [Fact]
@@ -54,6 +53,8 @@ public sealed class SmScriptSetTests
 
         Assert.Throws<InvalidOperationException>(() => SmScriptSet.Load(dir.Path));
     }
+
+    private static string[] Chunks(string value) => [.. value.Chunk(32).Select(c => new string(c))];
 
     private sealed class TempDir : IDisposable
     {

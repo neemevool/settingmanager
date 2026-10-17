@@ -11,7 +11,7 @@ services:
       - ${SQL_SCRIPTS_PATH}:/app/sql-scripts
 
   vtmf-settings-mcp:
-    image: vtmf/settingsmanager-mcp:v2.16
+    image: vtmf/settingsmanager-mcp:v2.17
     ports:
       - "127.0.0.1:8081:8080"
     env_file: settings.env

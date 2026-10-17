@@ -2,6 +2,7 @@
 
 ```bash
 docker build --tag vtmf/settingsmanager:v2.16 --attest type=sbom,generator=docker/scout-sbom-indexer:latest --pull --push .
+docker build -f Dockerfile.mcp --tag vtmf/settingsmanager-mcp:v2.17 --attest type=sbom,generator=docker/scout-sbom-indexer:latest --pull --push .
 ```
 ## Docker compose stack
 
@@ -16,6 +17,12 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
     volumes:
       - data-protection-keys:/app/keys
+
+  vtmf-settings-mcp:
+    image: vtmf/settingsmanager-mcp:v2.17
+    ports:
+      - "127.0.0.1:8081:8080"
+    env_file: settings.env
 
 volumes:
   data-protection-keys:
@@ -50,7 +57,7 @@ Local (stdio) — build once, then register the built dll (not `dotnet run`, who
     dotnet build VTMF.Settings.Mcp
     claude mcp add vtmf-settings -- dotnet C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Mcp\bin\Debug\net10.0\VTMF.Settings.Mcp.dll
 
-Docker (HTTP):
+Docker (HTTP). If you override `VTMF_SETTINGS_MCP_URL` to a host other than localhost/127.0.0.1, `AllowedHosts` must include that host (env var `AllowedHosts`):
 
     docker compose up -d vtmf-settings-mcp
     claude mcp add --transport http vtmf-settings http://localhost:8081/mcp
