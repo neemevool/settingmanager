@@ -21,9 +21,11 @@ public sealed class SqlServerFixture : IAsyncLifetime
     public const string UpgradeClientName = "upgrade";
     public const string ConcurrentClientName = "concurrent";
     public const string BrokenClientName = "broken";
+    public const string OutdatedClientName = "outdated";
+    public const string NewerClientName = "newer";
 
     public static string[] AllClientNames { get; } =
-        [ClientName, EmptyClientName, FreshClientName, UpgradeClientName, ConcurrentClientName, BrokenClientName];
+        [ClientName, EmptyClientName, FreshClientName, UpgradeClientName, ConcurrentClientName, BrokenClientName, OutdatedClientName, NewerClientName];
 
     private readonly MsSqlContainer _container = new MsSqlBuilder()
         .WithImage("mcr.microsoft.com/mssql/server:2025-latest")
@@ -31,7 +33,7 @@ public sealed class SqlServerFixture : IAsyncLifetime
 
     public SqlConnectionProvider Connections { get; private set; } = null!;
 
-    public SmClient Sm => new(Connections);
+    public SmClient Sm => new(Connections, Scripts);
 
     public SmScriptSet Scripts { get; private set; } = null!;
 
@@ -43,7 +45,7 @@ public sealed class SqlServerFixture : IAsyncLifetime
         var master = _container.GetConnectionString();
 
         // Client databases may still run at an older compatibility level after the server upgrade.
-        await ExecuteAsync(master, "CREATE DATABASE smtest; ALTER DATABASE smtest SET COMPATIBILITY_LEVEL = 150; CREATE DATABASE smempty; CREATE DATABASE smfresh; CREATE DATABASE smupgrade; CREATE DATABASE smconcurrent; CREATE DATABASE smbroken;");
+        await ExecuteAsync(master, "CREATE DATABASE smtest; ALTER DATABASE smtest SET COMPATIBILITY_LEVEL = 150; CREATE DATABASE smempty; CREATE DATABASE smfresh; CREATE DATABASE smupgrade; CREATE DATABASE smconcurrent; CREATE DATABASE smbroken; CREATE DATABASE smoutdated; CREATE DATABASE smnewer;");
 
         var builder = new SqlConnectionStringBuilder(master);
         Connections = new SqlConnectionProvider(new Dictionary<string, SqlConnectionParameters>
@@ -54,12 +56,14 @@ public sealed class SqlServerFixture : IAsyncLifetime
             [UpgradeClientName] = Parameters(builder, "smupgrade", UpgradeClientName),
             [ConcurrentClientName] = Parameters(builder, "smconcurrent", ConcurrentClientName),
             [BrokenClientName] = Parameters(builder, "smbroken", BrokenClientName),
+            [OutdatedClientName] = Parameters(builder, "smoutdated", OutdatedClientName),
+            [NewerClientName] = Parameters(builder, "smnewer", NewerClientName),
         });
 
         Scripts = SmScriptSet.LoadDefault();
         Installer = new SmInstaller(Connections, Scripts);
 
-        foreach (var client in new[] { ClientName, FreshClientName, UpgradeClientName, ConcurrentClientName, BrokenClientName })
+        foreach (var client in new[] { ClientName, FreshClientName, UpgradeClientName, ConcurrentClientName, BrokenClientName, OutdatedClientName, NewerClientName })
         {
             foreach (var script in Database5Scripts.BaseScripts)
                 await RunScriptFileAsync(Connections.GetConnectionString(client), script);
@@ -70,6 +74,12 @@ public sealed class SqlServerFixture : IAsyncLifetime
 
         await Installer.InstallAsync(UpgradeClientName);
         await ExecuteAsync(Connections.GetConnectionString(UpgradeClientName), "UPDATE sm.moduleinfo SET version = 1");
+
+        await Installer.InstallAsync(OutdatedClientName);
+        await ExecuteAsync(Connections.GetConnectionString(OutdatedClientName), "UPDATE sm.moduleinfo SET version = 1");
+
+        await Installer.InstallAsync(NewerClientName);
+        await ExecuteAsync(Connections.GetConnectionString(NewerClientName), $"UPDATE sm.moduleinfo SET version = {Scripts.Version + 1}");
 
         // Deterministic failure of script 030: sm.GetProcesses already exists as a table.
         var broken = Connections.GetConnectionString(BrokenClientName);

@@ -32,4 +32,40 @@ public sealed class ModuleInfoTests(SqlServerFixture fixture)
 
         Assert.Equal(SmErrorCodes.ModuleNotInstalled, ex.Code);
     }
+
+    [Fact]
+    public async Task GetModuleStatus_Outdated_ReportsState()
+    {
+        var status = await fixture.Sm.GetModuleStatusAsync(SqlServerFixture.OutdatedClientName);
+
+        Assert.Equal("outdated", status.State);
+        Assert.Equal(1, status.Version);
+        Assert.Equal(fixture.Scripts.Version, status.AvailableVersion);
+    }
+
+    [Fact]
+    public async Task GetModuleStatus_Newer_ReportsState()
+    {
+        var status = await fixture.Sm.GetModuleStatusAsync(SqlServerFixture.NewerClientName);
+
+        Assert.Equal("newer_than_tool", status.State);
+        Assert.Equal(fixture.Scripts.Version + 1, status.Version);
+    }
+
+    [Fact]
+    public async Task GetModuleStatus_UpToDate_ReportsState()
+    {
+        var status = await fixture.Sm.GetModuleStatusAsync(SqlServerFixture.ClientName);
+
+        Assert.Equal("up_to_date", status.State);
+    }
+
+    [Fact]
+    public async Task GetModuleStatus_NotInstalled_ReportsStateAndAvailableVersion()
+    {
+        var status = await fixture.Sm.GetModuleStatusAsync(SqlServerFixture.EmptyClientName);
+
+        Assert.Equal("not_installed", status.State);
+        Assert.Equal(fixture.Scripts.Version, status.AvailableVersion);
+    }
 }

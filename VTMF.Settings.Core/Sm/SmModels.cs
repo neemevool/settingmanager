@@ -11,6 +11,8 @@ public sealed class SmModuleStatus
 {
     public bool Installed { get; init; }
     public int? Version { get; init; }
+    public int AvailableVersion { get; init; }
+    public string State { get; init; } = SmModuleStates.NotInstalled;
 }
 
 public sealed class SmInstallResult

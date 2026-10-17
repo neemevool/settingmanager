@@ -64,6 +64,16 @@ public sealed class SmInstallerTests(SqlServerFixture fixture)
     }
 
     [Fact]
+    public async Task Install_NewerThanTool_Refuses()
+    {
+        var ex = await Assert.ThrowsAsync<SmException>(() => fixture.Installer.InstallAsync(SqlServerFixture.NewerClientName));
+
+        Assert.Equal("module_newer_than_tool", ex.Code);
+        var version = await fixture.ScalarOnAsync<int>(SqlServerFixture.NewerClientName, "SELECT version FROM sm.moduleinfo");
+        Assert.Equal(fixture.Scripts.Version + 1, version);
+    }
+
+    [Fact]
     public async Task Install_DefaultMetaBase_ThrowsKeyNotFound() =>
         await Assert.ThrowsAsync<KeyNotFoundException>(() => fixture.Installer.InstallAsync(SqlConnectionParameters.DefaultMetaBaseClientName));
 }

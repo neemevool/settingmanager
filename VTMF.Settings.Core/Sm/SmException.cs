@@ -36,7 +36,7 @@ public sealed class SmException : Exception
             && exception.Message.Contains("'sm.", StringComparison.OrdinalIgnoreCase))
         {
             translated = new SmException(SmErrorCodes.ModuleNotInstalled,
-                "The settings management module (sm) is not installed in this client database. Install set 'settingsmanagement' with the VTMF.Settings installer.",
+                "The settings management module (sm) is not installed in this client database. Call install_module for this client.",
                 exception);
             return true;
         }

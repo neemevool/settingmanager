@@ -6,11 +6,11 @@ using VTMF.Settings.Services;
 namespace VTMF.Settings.Core.Sm;
 
 /// <summary>Typed access to the sm.* procedures of a client database. Holds no business rules.</summary>
-public sealed class SmClient(SqlConnectionProvider connections)
+public sealed class SmClient(SqlConnectionProvider connections, SmScriptSet scripts)
 {
     public async Task<SmModuleInfo?> GetModuleInfoAsync(string client, CancellationToken cancellationToken = default)
     {
-        var rows = await QueryAsync<SmModuleInfo>(client, "sm.GetModuleInfo", null, cancellationToken).ConfigureAwait(false);
+        var rows = await QueryUngatedAsync<SmModuleInfo>(client, "sm.GetModuleInfo", null, cancellationToken).ConfigureAwait(false);
         return rows.Count > 0 ? rows[0] : null;
     }
 
@@ -19,11 +19,11 @@ public sealed class SmClient(SqlConnectionProvider connections)
         try
         {
             var info = await GetModuleInfoAsync(client, cancellationToken).ConfigureAwait(false);
-            return new SmModuleStatus { Installed = info is not null, Version = info?.Version };
+            return Status(info?.Version);
         }
         catch (SmException ex) when (ex.Code == SmErrorCodes.ModuleNotInstalled)
         {
-            return new SmModuleStatus { Installed = false, Version = null };
+            return Status(null);
         }
     }
 
@@ -42,6 +42,7 @@ public sealed class SmClient(SqlConnectionProvider connections)
         string client, string process, string table, string? environment = null, string? language = null,
         CancellationToken cancellationToken = default)
     {
+        await EnsureUpToDateAsync(client, cancellationToken).ConfigureAwait(false);
         await using var connection = connections.GetConnection(client);
         try
         {
@@ -65,7 +66,41 @@ public sealed class SmClient(SqlConnectionProvider connections)
     public Task<IReadOnlyList<SmLegacyEnvRow>> GetLegacyEnvRowsAsync(string client, string process, CancellationToken cancellationToken = default) =>
         QueryAsync<SmLegacyEnvRow>(client, "sm.GetLegacyEnvRows", new { process }, cancellationToken);
 
+    private SmModuleStatus Status(int? version) => new()
+    {
+        Installed = version is not null,
+        Version = version,
+        AvailableVersion = scripts.Version,
+        State = SmModuleStates.From(version, scripts.Version),
+    };
+
+    /// <summary>Central version gate: every query except module info/status goes through here.</summary>
+    private async Task EnsureUpToDateAsync(string client, CancellationToken cancellationToken)
+    {
+        var status = await GetModuleStatusAsync(client, cancellationToken).ConfigureAwait(false);
+        switch (status.State)
+        {
+            case SmModuleStates.UpToDate:
+                return;
+            case SmModuleStates.NewerThanTool:
+                throw new SmException(SmErrorCodes.ModuleNewerThanTool,
+                    $"The sm module in client '{client}' is version {status.Version}, newer than this tool's version {status.AvailableVersion}. Update the VTMF.Settings MCP server image.");
+            case SmModuleStates.Outdated:
+                throw new SmException(SmErrorCodes.ModuleOutdated,
+                    $"The sm module in client '{client}' is outdated (installed version {status.Version}, available {status.AvailableVersion}); call install_module for client '{client}'.");
+            default:
+                throw new SmException(SmErrorCodes.ModuleNotInstalled,
+                    $"The sm module is not installed in client '{client}' (available version {status.AvailableVersion}); call install_module for client '{client}'.");
+        }
+    }
+
     private async Task<IReadOnlyList<T>> QueryAsync<T>(string client, string procedure, object? parameters, CancellationToken cancellationToken)
+    {
+        await EnsureUpToDateAsync(client, cancellationToken).ConfigureAwait(false);
+        return await QueryUngatedAsync<T>(client, procedure, parameters, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<IReadOnlyList<T>> QueryUngatedAsync<T>(string client, string procedure, object? parameters, CancellationToken cancellationToken)
     {
         await using var connection = connections.GetConnection(client);
         try
