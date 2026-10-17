@@ -23,9 +23,11 @@ public sealed class SqlServerFixture : IAsyncLifetime
     public const string BrokenClientName = "broken";
     public const string OutdatedClientName = "outdated";
     public const string NewerClientName = "newer";
+    public const string ToolFreshClientName = "toolfresh";
+    public const string UnreachableClientName = "unreachable";
 
     public static string[] AllClientNames { get; } =
-        [ClientName, EmptyClientName, FreshClientName, UpgradeClientName, ConcurrentClientName, BrokenClientName, OutdatedClientName, NewerClientName];
+        [ClientName, EmptyClientName, FreshClientName, UpgradeClientName, ConcurrentClientName, BrokenClientName, OutdatedClientName, NewerClientName, ToolFreshClientName, UnreachableClientName];
 
     private readonly MsSqlContainer _container = new MsSqlBuilder()
         .WithImage("mcr.microsoft.com/mssql/server:2025-latest")
@@ -45,7 +47,7 @@ public sealed class SqlServerFixture : IAsyncLifetime
         var master = _container.GetConnectionString();
 
         // Client databases may still run at an older compatibility level after the server upgrade.
-        await ExecuteAsync(master, "CREATE DATABASE smtest; ALTER DATABASE smtest SET COMPATIBILITY_LEVEL = 150; CREATE DATABASE smempty; CREATE DATABASE smfresh; CREATE DATABASE smupgrade; CREATE DATABASE smconcurrent; CREATE DATABASE smbroken; CREATE DATABASE smoutdated; CREATE DATABASE smnewer;");
+        await ExecuteAsync(master, "CREATE DATABASE smtest; ALTER DATABASE smtest SET COMPATIBILITY_LEVEL = 150; CREATE DATABASE smempty; CREATE DATABASE smfresh; CREATE DATABASE smupgrade; CREATE DATABASE smconcurrent; CREATE DATABASE smbroken; CREATE DATABASE smoutdated; CREATE DATABASE smnewer; CREATE DATABASE smtoolfresh;");
 
         var builder = new SqlConnectionStringBuilder(master);
         Connections = new SqlConnectionProvider(new Dictionary<string, SqlConnectionParameters>
@@ -58,12 +60,22 @@ public sealed class SqlServerFixture : IAsyncLifetime
             [BrokenClientName] = Parameters(builder, "smbroken", BrokenClientName),
             [OutdatedClientName] = Parameters(builder, "smoutdated", OutdatedClientName),
             [NewerClientName] = Parameters(builder, "smnewer", NewerClientName),
+            [ToolFreshClientName] = Parameters(builder, "smtoolfresh", ToolFreshClientName),
+            [UnreachableClientName] = new SqlConnectionParameters
+            {
+                ClientName = UnreachableClientName,
+                Server = "Server=tcp:127.0.0.1,1;Connect Timeout=2;TrustServerCertificate=True",
+                UserId = "sa",
+                Password = "unused",
+            },
+            // Not a client: lets tests prove the installer guard rather than the unknown-key path.
+            [SqlConnectionParameters.DefaultMetaBaseClientName] = Parameters(builder, "smempty", SqlConnectionParameters.DefaultMetaBaseClientName),
         });
 
         Scripts = SmScriptSet.LoadDefault();
         Installer = new SmInstaller(Connections, Scripts);
 
-        foreach (var client in new[] { ClientName, FreshClientName, UpgradeClientName, ConcurrentClientName, BrokenClientName, OutdatedClientName, NewerClientName })
+        foreach (var client in new[] { ClientName, FreshClientName, UpgradeClientName, ConcurrentClientName, BrokenClientName, OutdatedClientName, NewerClientName, ToolFreshClientName })
         {
             foreach (var script in Database5Scripts.BaseScripts)
                 await RunScriptFileAsync(Connections.GetConnectionString(client), script);

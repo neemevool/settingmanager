@@ -74,6 +74,22 @@ public sealed class SettingsReadToolsTests(SqlServerFixture fixture)
 
         Assert.True(usage.Ok && legacy.Ok && tables.Ok);
     }
+
+    [Fact]
+    public async Task ModuleStatus_UnreachableServer_ReturnsSmError()
+    {
+        var result = await Tools.ModuleStatus(SqlServerFixture.UnreachableClientName, CancellationToken.None);
+
+        Assert.False(result.Ok);
+        Assert.Equal(SmErrorCodes.SmError, result.Error!.Code);
+    }
+
+    [Fact]
+    public async Task ListProcesses_UnreachableServer_ReturnsSmError()
+    {
+        var result = await Tools.ListProcesses(SqlServerFixture.UnreachableClientName, CancellationToken.None);
+
+        Assert.False(result.Ok);
+        Assert.Equal(SmErrorCodes.SmError, result.Error!.Code);
+    }
 }
-
-

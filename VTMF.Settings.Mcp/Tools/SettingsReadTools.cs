@@ -20,7 +20,7 @@ public sealed class SettingsReadTools(SmClient sm, SqlConnectionProvider connect
         ToolResult.Success<IReadOnlyList<string>>(connections.GetAvailableClients().ToList());
 
     [McpServerTool(Name = "module_status", ReadOnly = true)]
-    [Description("Reports whether the settings management module (sm schema) is installed in the client database and its version. Tools other than list_clients need it.")]
+    [Description("Reports the settings management module (sm schema) state in the client database: not_installed, up_to_date, outdated or newer_than_tool, plus its version. Call this first; if not_installed or outdated, run install_module. Tools other than list_clients and install_module need a current module.")]
     public Task<ToolResult<SmModuleStatus>> ModuleStatus(
         [Description(ClientDescription)] string client, CancellationToken cancellationToken) =>
         ToolResult.RunAsync(() => sm.GetModuleStatusAsync(client, cancellationToken));

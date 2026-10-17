@@ -1,3 +1,4 @@
+using Microsoft.Data.SqlClient;
 using VTMF.Settings.Core.Sm;
 
 namespace VTMF.Settings.Mcp;
@@ -28,6 +29,10 @@ public static class ToolResult
         catch (SmException ex)
         {
             return Failure<T>(ex.Code, ex.Message);
+        }
+        catch (SqlException ex)
+        {
+            return Failure<T>(SmErrorCodes.SmError, ex.Message);
         }
         catch (KeyNotFoundException ex)
         {

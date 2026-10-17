@@ -10,7 +10,7 @@ if (transport == McpTransport.Http)
     var builder = WebApplication.CreateBuilder(args);
     AddConfiguration(builder.Configuration);
     builder.Services.AddSqlConnectionParameters().AddSmClient();
-    builder.Services.AddMcpServer().WithHttpTransport().WithTools<SettingsReadTools>();
+    builder.Services.AddSettingsMcpServer().WithHttpTransport();
 
     var app = builder.Build();
     app.MapMcp("/mcp");
@@ -23,7 +23,7 @@ else
     builder.Logging.AddConsole(options => options.LogToStandardErrorThreshold = LogLevel.Trace);
     AddConfiguration(builder.Configuration);
     builder.Services.AddSqlConnectionParameters().AddSmClient();
-    builder.Services.AddMcpServer().WithStdioServerTransport().WithTools<SettingsReadTools>();
+    builder.Services.AddSettingsMcpServer().WithStdioServerTransport();
 
     await builder.Build().RunAsync().ConfigureAwait(false);
 }
