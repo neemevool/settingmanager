@@ -37,8 +37,10 @@ SQLCONNECTIONPARAMETERS__1__PASSWORD=**********
 
 ## Settings management MCP server (VTMF.Settings.Mcp)
 
-Read-only MCP tools over the `sm` procedures (phase 1). Each client database needs the
-`settingsmanagement` install set (Installer page) before its tools work; `module_status` reports it.
+MCP tools over the `sm` procedures. Each client database needs the `sm` module before its tools work;
+`module_status` reports it and `install_module` installs or upgrades it (scripts ship inside the MCP image,
+so the Installer page set is no longer used). In production the MCP service is defined in `composeprod.yaml`,
+bound to `127.0.0.1:8081` only because the MCP server has no authentication.
 
 Connections are configured exactly like VTMF.Settings (`SqlConnectionParameters` via user secrets or
 environment variables / `settings.env`). Modifications are attributed to the SQL login of the connection.
