@@ -1,0 +1,58 @@
+-- Rows in base frontend tables whose workercode is not ALL: legacy environment overrides that belong
+-- in the overlay table {table}{environment}.
+CREATE OR ALTER PROCEDURE sm.GetLegacyEnvRows
+    @process nvarchar(100)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF sm.IsSafeName(@process) = 0
+        THROW 51001, N'Invalid process name.', 1;
+    IF NOT EXISTS (SELECT 1 FROM dbo.processtypes WHERE NAME = @process)
+        THROW 51003, N'Process not found.', 1;
+
+    DECLARE @mask nvarchar(10) = N'********';
+
+    CREATE TABLE #legacy
+    (
+        physicaltable sysname        NOT NULL,
+        [view]        nvarchar(100)  NOT NULL,
+        workercode    nvarchar(100)  NOT NULL,
+        name          nvarchar(200)  NOT NULL,
+        value         nvarchar(400)  NOT NULL,
+        settingtype   nvarchar(20)   NOT NULL,
+        listvalue     nvarchar(1600) NULL,
+        ordernr       int            NOT NULL
+    );
+
+    DECLARE @t sysname, @v nvarchar(100), @sql nvarchar(max);
+    DECLARE tables CURSOR LOCAL FAST_FORWARD FOR
+        SELECT physicaltable, [view] FROM sm.ProcessTables(@process) WHERE layer = N'base';
+    OPEN tables;
+    FETCH NEXT FROM tables INTO @t, @v;
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        SET @sql = N'INSERT INTO #legacy (physicaltable, [view], workercode, name, value, settingtype, listvalue, ordernr)
+                     SELECT @t, @v, workercode, NAME,
+                            CASE WHEN settingtype = N''ServerSetting'' THEN @mask ELSE VALUE END,
+                            settingtype, LISTVALUE, ordernr
+                     FROM dbo.' + QUOTENAME(@t) + N' WHERE workercode <> N''ALL''';
+        EXEC sys.sp_executesql @sql, N'@t sysname, @v nvarchar(100), @mask nvarchar(10)', @t, @v, @mask;
+        FETCH NEXT FROM tables INTO @t, @v;
+    END
+    CLOSE tables;
+    DEALLOCATE tables;
+
+    SELECT l.physicaltable,
+           l.[view],
+           l.workercode AS environment,
+           l.name,
+           l.value,
+           l.settingtype,
+           l.listvalue,
+           l.ordernr,
+           CAST(CASE WHEN OBJECT_ID(N'dbo.' + QUOTENAME(l.physicaltable + l.workercode), N'U') IS NOT NULL THEN 1 ELSE 0 END AS bit) AS overlayexists
+    FROM #legacy AS l
+    ORDER BY l.physicaltable, l.workercode, l.ordernr;
+END
+GO

@@ -1,0 +1,48 @@
+CREATE OR ALTER PROCEDURE sm.GetTables
+    @process nvarchar(100)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF sm.IsSafeName(@process) = 0
+        THROW 51001, N'Invalid process name.', 1;
+    IF NOT EXISTS (SELECT 1 FROM dbo.processtypes WHERE NAME = @process)
+        THROW 51003, N'Process not found.', 1;
+
+    DECLARE @alias nvarchar(100) =
+        (SELECT TOP (1) NULLIF(SETTINGPROCEDURES, NAME) FROM dbo.processtypes WHERE NAME = @process);
+
+    WITH t AS
+    (
+        SELECT pt.physicaltable, pt.[view], pt.layer, @process AS owner
+        FROM sm.ProcessTables(@process) AS pt
+        UNION ALL
+        SELECT pt.physicaltable, pt.[view], pt.layer, @alias
+        FROM sm.ProcessTables(@alias) AS pt
+        WHERE @alias IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM sm.ProcessTables(@process) AS own
+                          WHERE own.[view] = pt.[view] AND own.layer = pt.layer)
+    )
+    SELECT t.[view],
+           t.layer,
+           t.physicaltable,
+           t.owner,
+           CAST(ISNULL((SELECT SUM(p.rows) FROM sys.partitions AS p
+                        WHERE p.object_id = OBJECT_ID(N'dbo.' + QUOTENAME(t.physicaltable)) AND p.index_id IN (0, 1)), 0) AS int) AS [rowcount],
+           CASE
+               WHEN t.layer <> N'base' THEN NULL
+               WHEN OBJECT_ID(N'dbo.' + QUOTENAME(N'Get' + @process + t.[view] + N'Info'), N'P') IS NOT NULL THEN N'Get' + @process + t.[view] + N'Info'
+               WHEN OBJECT_ID(N'dbo.' + QUOTENAME(N'Get' + @process + t.[view] + N'Info-'), N'P') IS NOT NULL THEN N'Get' + @process + t.[view] + N'Info-'
+           END AS overrideprocedure,
+           CAST(CASE
+                    WHEN t.layer = N'base' AND OBJECT_ID(N'dbo.' + QUOTENAME(N'Get' + @process + t.[view] + N'Info'), N'P') IS NOT NULL THEN 1
+                    ELSE 0
+                END AS bit) AS overrideactive
+    FROM t
+    UNION ALL
+    SELECT N'ServerProcessSettings', N'base', N'ServerProcessSettings', @process,
+           (SELECT COUNT(*) FROM dbo.ServerProcessSettings WHERE LEFT(NAME, LEN(@process) + 1) = @process + N'.'),
+           NULL, CAST(0 AS bit)
+    ORDER BY 1, 2;
+END
+GO

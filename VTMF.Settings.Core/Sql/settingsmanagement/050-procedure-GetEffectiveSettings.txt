@@ -1,0 +1,183 @@
+-- Result set 1: resolution info. Result set 2: effective rows with the layer that supplied each value.
+CREATE OR ALTER PROCEDURE sm.GetEffectiveSettings
+    @process     nvarchar(100),
+    @table       nvarchar(100),
+    @environment nvarchar(100) = NULL,
+    @language    nvarchar(10)  = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF sm.IsSafeName(@process) = 0 OR sm.IsSafeName(@table) = 0
+        THROW 51001, N'Invalid process or table name.', 1;
+    IF (ISNULL(@environment, N'') <> N'' AND sm.IsSafeName(@environment) = 0)
+       OR (ISNULL(@language, N'') <> N'' AND sm.IsSafeName(@language) = 0)
+        THROW 51002, N'Invalid environment or language.', 1;
+    IF NOT EXISTS (SELECT 1 FROM dbo.processtypes WHERE NAME = @process)
+        THROW 51003, N'Process not found.', 1;
+
+    DECLARE @mask nvarchar(10) = N'********';
+    DECLARE @alias nvarchar(100) = (SELECT TOP (1) COALESCE(SETTINGPROCEDURES, NAME) FROM dbo.processtypes WHERE NAME = @process);
+
+    IF @table = N'ServerProcessSettings'
+    BEGIN
+        SELECT N'ServerProcessSettings'                                   AS physicaltable,
+               CAST(CASE WHEN @alias <> @process THEN 1 ELSE 0 END AS bit) AS aliasused,
+               CAST(NULL AS nvarchar(200))                                AS overrideprocedure,
+               CAST(NULL AS nvarchar(200))                                AS additionalprocedure;
+
+        WITH c AS
+        (
+            SELECT SUBSTRING(s.NAME, LEN(@process) + 2, 200) AS name, s.VALUE, s.settingtype, s.LISTVALUE, s.ordernr,
+                   N'process' AS source, 1 AS prio
+            FROM dbo.ServerProcessSettings AS s
+            WHERE LEFT(s.NAME, LEN(@process) + 1) = @process + N'.' AND s.workercode = N'ALL'
+            UNION ALL
+            SELECT SUBSTRING(s.NAME, LEN(@alias) + 2, 200), s.VALUE, s.settingtype, s.LISTVALUE, s.ordernr,
+                   N'parent', 2
+            FROM dbo.ServerProcessSettings AS s
+            WHERE @alias <> @process AND LEFT(s.NAME, LEN(@alias) + 1) = @alias + N'.' AND s.workercode = N'ALL'
+        ),
+        r AS
+        (
+            SELECT *, ROW_NUMBER() OVER (PARTITION BY name ORDER BY prio) AS rn FROM c
+        )
+        SELECT name,
+               CASE WHEN settingtype = N'ServerSetting' THEN @mask ELSE VALUE END AS value,
+               settingtype, LISTVALUE AS listvalue, ordernr, source
+        FROM r
+        WHERE rn = 1 AND NULLIF(VALUE, N'') IS NOT NULL
+        ORDER BY name;
+        RETURN;
+    END
+
+    DECLARE @infoproc sysname = N'Get' + @process + @table + N'Info';
+    DECLARE @override sysname = CASE WHEN OBJECT_ID(N'dbo.' + QUOTENAME(@infoproc), N'P') IS NOT NULL THEN @infoproc END;
+    DECLARE @base sysname =
+        CASE
+            WHEN OBJECT_ID(N'dbo.' + QUOTENAME(@process + @table), N'U') IS NOT NULL THEN @process + @table
+            WHEN OBJECT_ID(N'dbo.' + QUOTENAME(@alias + @table), N'U') IS NOT NULL THEN @alias + @table
+        END;
+    DECLARE @additional sysname =
+        CASE WHEN @base IS NOT NULL AND OBJECT_ID(N'dbo.' + QUOTENAME(N'Get' + @base + N'Additional'), N'P') IS NOT NULL
+             THEN N'Get' + @base + N'Additional' END;
+
+    SELECT @base                                                                         AS physicaltable,
+           CAST(CASE WHEN @base IS NOT NULL AND @base <> @process + @table THEN 1 ELSE 0 END AS bit) AS aliasused,
+           @override                                                                     AS overrideprocedure,
+           @additional                                                                   AS additionalprocedure;
+
+    CREATE TABLE #rows
+    (
+        seq         int IDENTITY(1, 1) PRIMARY KEY,
+        name        nvarchar(200)  NOT NULL,
+        value       nvarchar(400)  NOT NULL,
+        settingtype nvarchar(20)   NOT NULL,
+        listvalue   nvarchar(1600) NULL,
+        ordernr     int            NOT NULL,
+        origin      nvarchar(10)   NOT NULL,
+        source      nvarchar(10)   NOT NULL
+    );
+    CREATE TABLE #layer
+    (
+        name        nvarchar(200)  NOT NULL,
+        value       nvarchar(400)  NOT NULL,
+        settingtype nvarchar(20)   NOT NULL,
+        listvalue   nvarchar(1600) NULL,
+        ordernr     int            NOT NULL
+    );
+
+    IF @base IS NOT NULL
+    BEGIN
+        DECLARE @sql nvarchar(max);
+
+        -- Step 1: base rows (workercode ALL, non-empty VALUE), ordered by ordernr
+        SET @sql = N'INSERT INTO #layer (name, value, settingtype, listvalue, ordernr)
+                     SELECT ISNULL(NAME, N''Grid''), ISNULL(VALUE, N''''), ISNULL(settingtype, N''Setting''), LISTVALUE, ISNULL(ordernr, 0)
+                     FROM dbo.' + QUOTENAME(@base) + N' WHERE workercode = N''ALL''';
+        EXEC sys.sp_executesql @sql;
+        INSERT INTO #rows (name, value, settingtype, listvalue, ordernr, origin, source)
+        SELECT name, value, settingtype, listvalue, ordernr, N'base', N'base'
+        FROM #layer
+        WHERE value <> N''
+        ORDER BY ordernr;
+
+        -- Step 2: environment overlay {base}{environment}, rows with workercode = environment
+        IF ISNULL(@environment, N'') NOT IN (N'', N'wterminal')
+           AND OBJECT_ID(N'dbo.' + QUOTENAME(@base + @environment), N'U') IS NOT NULL
+        BEGIN
+            TRUNCATE TABLE #layer;
+            SET @sql = N'INSERT INTO #layer (name, value, settingtype, listvalue, ordernr)
+                         SELECT ISNULL(NAME, N''Grid''), ISNULL(VALUE, N''''), ISNULL(settingtype, N''Setting''), LISTVALUE, ISNULL(ordernr, 0)
+                         FROM dbo.' + QUOTENAME(@base + @environment) + N' WHERE workercode = @env';
+            EXEC sys.sp_executesql @sql, N'@env nvarchar(100)', @environment;
+
+            -- 2a: override matching base Setting rows
+            UPDATE r
+               SET value = l.value, listvalue = l.listvalue, source = N'env'
+            FROM #rows AS r
+            JOIN #layer AS l ON l.name = r.name
+            WHERE r.origin = N'base'
+              AND r.settingtype COLLATE Latin1_General_BIN = N'Setting'
+              AND l.settingtype COLLATE Latin1_General_BIN = N'Setting';
+
+            -- 2b: append SettingGroup rows not present in base (NAME+VALUE concatenated, as WS does)
+            INSERT INTO #rows (name, value, settingtype, listvalue, ordernr, origin, source)
+            SELECT l.name, l.value, l.settingtype, l.listvalue, l.ordernr, N'env', N'env'
+            FROM #layer AS l
+            WHERE l.settingtype COLLATE Latin1_General_BIN = N'SettingGroup'
+              AND NOT EXISTS (SELECT 1 FROM #rows AS r
+                              WHERE r.origin = N'base'
+                                AND r.settingtype COLLATE Latin1_General_BIN = N'SettingGroup'
+                                AND r.name + r.value = l.name + l.value)
+            ORDER BY l.ordernr;
+
+            -- 2c: append Setting rows not present in base
+            INSERT INTO #rows (name, value, settingtype, listvalue, ordernr, origin, source)
+            SELECT l.name, l.value, l.settingtype, l.listvalue, l.ordernr, N'env', N'env'
+            FROM #layer AS l
+            WHERE l.settingtype COLLATE Latin1_General_BIN = N'Setting'
+              AND NOT EXISTS (SELECT 1 FROM #rows AS r
+                              WHERE r.origin = N'base'
+                                AND r.settingtype COLLATE Latin1_General_BIN = N'Setting'
+                                AND r.name = l.name)
+            ORDER BY l.ordernr;
+        END
+
+        -- Step 3: language overlay {base}{language}, rows with workercode ALL; matches base rows only
+        IF ISNULL(@language, N'') <> N''
+           AND OBJECT_ID(N'dbo.' + QUOTENAME(@base + @language), N'U') IS NOT NULL
+        BEGIN
+            TRUNCATE TABLE #layer;
+            SET @sql = N'INSERT INTO #layer (name, value, settingtype, listvalue, ordernr)
+                         SELECT ISNULL(NAME, N''Grid''), ISNULL(VALUE, N''''), ISNULL(settingtype, N''Setting''), LISTVALUE, ISNULL(ordernr, 0)
+                         FROM dbo.' + QUOTENAME(@base + @language) + N' WHERE workercode = N''ALL''';
+            EXEC sys.sp_executesql @sql;
+
+            UPDATE r
+               SET value = l.value, listvalue = l.listvalue, source = N'lang'
+            FROM #rows AS r
+            JOIN #layer AS l ON l.name = r.name
+            WHERE r.origin = N'base'
+              AND r.settingtype COLLATE Latin1_General_BIN = N'Setting'
+              AND l.settingtype COLLATE Latin1_General_BIN = N'Setting';
+
+            INSERT INTO #rows (name, value, settingtype, listvalue, ordernr, origin, source)
+            SELECT l.name, l.value, l.settingtype, l.listvalue, l.ordernr, N'lang', N'lang'
+            FROM #layer AS l
+            WHERE l.settingtype COLLATE Latin1_General_BIN = N'Setting'
+              AND NOT EXISTS (SELECT 1 FROM #rows AS r
+                              WHERE r.origin = N'base'
+                                AND r.settingtype COLLATE Latin1_General_BIN = N'Setting'
+                                AND r.name = l.name)
+            ORDER BY l.ordernr;
+        END
+    END
+
+    SELECT name,
+           CASE WHEN settingtype = N'ServerSetting' THEN @mask ELSE value END AS value,
+           settingtype, listvalue, ordernr, source
+    FROM #rows
+    ORDER BY seq;
+END
+GO

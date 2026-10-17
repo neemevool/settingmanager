@@ -1,0 +1,14 @@
+CREATE OR ALTER FUNCTION sm.IsSafeName(@name nvarchar(200))
+RETURNS bit
+AS
+BEGIN
+    -- Identifiers that end up in dynamic SQL: letters, digits and underscore only.
+    RETURN CASE
+               WHEN @name IS NOT NULL
+                    AND LEN(@name) BETWEEN 1 AND 128
+                    AND @name COLLATE Latin1_General_BIN NOT LIKE N'%[^A-Za-z0-9_]%'
+               THEN CAST(1 AS bit)
+               ELSE CAST(0 AS bit)
+           END;
+END
+GO

@@ -1,0 +1,21 @@
+CREATE OR ALTER PROCEDURE sm.GetProcesses
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    SELECT p.NAME              AS name,
+           p.DISPLAYLABEL      AS displaylabel,
+           p.TAG               AS tag,
+           p.PROCESSTYPE       AS processtype,
+           p.DATAPROCEDURES    AS dataprocedures,
+           p.SETTINGPROCEDURES AS settingprocedures,
+           p.ENVIRONMENT       AS environment,
+           p.ORDERNR           AS ordernr,
+           (SELECT STRING_AGG(v.NAME, N',') WITHIN GROUP (ORDER BY v.NAME)
+            FROM dbo.processtypes AS v
+            WHERE v.SETTINGPROCEDURES = p.NAME AND v.NAME <> p.NAME) AS variants,
+           (SELECT COUNT(*) FROM sm.ProcessTables(p.NAME)) AS tablecount
+    FROM dbo.processtypes AS p
+    ORDER BY p.ORDERNR, p.NAME;
+END
+GO

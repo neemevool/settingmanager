@@ -1,0 +1,67 @@
+CREATE OR ALTER PROCEDURE sm.GetSettings
+    @process    nvarchar(100),
+    @table      nvarchar(100),
+    @layer      nvarchar(110) = N'base',
+    @namePrefix nvarchar(200) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF sm.IsSafeName(@process) = 0 OR sm.IsSafeName(@table) = 0
+        THROW 51001, N'Invalid process or table name.', 1;
+
+    DECLARE @kind nvarchar(10), @suffix nvarchar(100), @workercode nvarchar(100);
+    SELECT @kind = kind, @suffix = suffix, @workercode = workercode FROM sm.ResolveLayer(@layer);
+    IF @kind IS NULL
+        THROW 51002, N'Invalid layer. Use base, env:{name} or lang:{code} (lowercase letters, digits, underscore).', 1;
+
+    -- The physical table name must fit in sysname; a silently truncated name could resolve to a different table.
+    IF LEN(@process) + LEN(@table) + LEN(@suffix) > 128
+        THROW 51001, N'Invalid process or table name: the combined table name exceeds 128 characters.', 1;
+
+    IF NOT EXISTS (SELECT 1 FROM dbo.processtypes WHERE NAME = @process)
+        THROW 51003, N'Process not found.', 1;
+
+    DECLARE @mask nvarchar(10) = N'********';
+
+    IF @table = N'ServerProcessSettings'
+    BEGIN
+        IF @kind <> N'base'
+            THROW 51005, N'ServerProcessSettings supports only the base layer.', 1;
+
+        SELECT N'ServerProcessSettings'                                        AS [table],
+               N'base'                                                         AS layer,
+               SUBSTRING(s.NAME, LEN(@process) + 2, 200)                       AS name,
+               CASE WHEN s.settingtype = N'ServerSetting' THEN @mask ELSE s.VALUE END AS value,
+               s.settingtype,
+               s.LISTVALUE                                                     AS listvalue,
+               s.ordernr
+        FROM dbo.ServerProcessSettings AS s
+        WHERE LEFT(s.NAME, LEN(@process) + 1) = @process + N'.'
+          AND s.workercode = N'ALL'
+          AND (@namePrefix IS NULL OR LEFT(SUBSTRING(s.NAME, LEN(@process) + 2, 200), LEN(@namePrefix)) = @namePrefix)
+        ORDER BY s.ordernr, s.NAME;
+        RETURN;
+    END
+
+    DECLARE @physical sysname = @process + @table + CASE WHEN @kind = N'base' THEN N'' ELSE @suffix END;
+    IF OBJECT_ID(N'dbo.' + QUOTENAME(@physical), N'U') IS NULL
+    BEGIN
+        DECLARE @msg nvarchar(2048) = CONCAT(N'Table not found: ', @physical, N'. If the process uses SETTINGPROCEDURES, read the parent process.');
+        THROW 51004, @msg, 1;
+    END
+
+    DECLARE @sql nvarchar(max) = N'
+        SELECT @table AS [table], @layer AS layer, s.NAME AS name,
+               CASE WHEN s.settingtype = N''ServerSetting'' THEN @mask ELSE s.VALUE END AS value,
+               s.settingtype, s.LISTVALUE AS listvalue, s.ordernr
+        FROM dbo.' + QUOTENAME(@physical) + N' AS s
+        WHERE s.workercode = @workercode
+          AND (@namePrefix IS NULL OR LEFT(s.NAME, LEN(@namePrefix)) = @namePrefix)
+        ORDER BY s.ordernr, s.NAME;';
+
+    EXEC sys.sp_executesql @sql,
+        N'@table nvarchar(100), @layer nvarchar(110), @mask nvarchar(10), @workercode nvarchar(100), @namePrefix nvarchar(200)',
+        @table, @layer, @mask, @workercode, @namePrefix;
+END
+GO

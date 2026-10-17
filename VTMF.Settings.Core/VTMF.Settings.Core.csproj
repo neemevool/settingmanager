@@ -29,4 +29,8 @@
     <InternalsVisibleTo Include="VTMF.Settings.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="Sql\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

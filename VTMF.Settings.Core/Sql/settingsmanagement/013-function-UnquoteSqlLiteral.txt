@@ -1,0 +1,13 @@
+-- 'abc' / N'abc' -> abc (with '' -> '); anything else (variables, numbers) is returned trimmed.
+CREATE OR ALTER FUNCTION sm.UnquoteSqlLiteral(@s nvarchar(1600))
+RETURNS nvarchar(1600)
+AS
+BEGIN
+    DECLARE @t nvarchar(1600) = LTRIM(RTRIM(@s));
+    IF @t LIKE N'N''%'''
+        SET @t = SUBSTRING(@t, 2, 1600);
+    IF LEN(@t) >= 2 AND LEFT(@t, 1) = N'''' AND RIGHT(@t, 1) = N''''
+        RETURN REPLACE(SUBSTRING(@t, 2, LEN(@t) - 2), N'''''', N'''');
+    RETURN @t;
+END
+GO

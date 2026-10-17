@@ -14,3 +14,8 @@
 
 \- Never call `dotnet build` / `dotnet test` directly (a hook blocks it).
 
+
+
+## sm module scripts
+
+Any change under `VTMF.Settings.Core/Sql/settingsmanagement/` requires bumping `version` in `module.json` and updating `sha256` (the `RecordedHash_MatchesScripts` test prints the new value). Scripts must stay idempotent; no `BEGIN TRAN` in scripts.

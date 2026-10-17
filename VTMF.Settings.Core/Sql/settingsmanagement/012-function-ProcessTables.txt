@@ -1,0 +1,43 @@
+-- Settings tables owned by a process: dbo tables with a settingtype column named {process}{View}
+-- (View starts with an uppercase letter). A table whose name is another such table plus a
+-- lowercase suffix is an overlay: 2-character suffix = language, otherwise environment.
+CREATE OR ALTER FUNCTION sm.ProcessTables(@process nvarchar(100))
+RETURNS TABLE
+AS
+RETURN
+WITH cand AS
+(
+    SELECT t.TABLE_NAME AS physicaltable
+    FROM INFORMATION_SCHEMA.TABLES AS t
+    WHERE t.TABLE_SCHEMA = N'dbo'
+      AND t.TABLE_TYPE = N'BASE TABLE'
+      AND LEFT(t.TABLE_NAME, LEN(@process)) = @process
+      AND SUBSTRING(t.TABLE_NAME, LEN(@process) + 1, 1) COLLATE Latin1_General_BIN LIKE N'[A-Z]'
+      AND EXISTS (SELECT 1
+                  FROM INFORMATION_SCHEMA.COLUMNS AS c
+                  WHERE c.TABLE_SCHEMA = t.TABLE_SCHEMA
+                    AND c.TABLE_NAME = t.TABLE_NAME
+                    AND c.COLUMN_NAME = N'settingtype')
+),
+classified AS
+(
+    SELECT c.physicaltable,
+           b.physicaltable AS basetable,
+           ROW_NUMBER() OVER (PARTITION BY c.physicaltable ORDER BY LEN(b.physicaltable) DESC) AS rn
+    FROM cand AS c
+    LEFT JOIN cand AS b
+           ON LEN(c.physicaltable) > LEN(b.physicaltable)
+          AND LEFT(c.physicaltable, LEN(b.physicaltable)) = b.physicaltable
+          AND SUBSTRING(c.physicaltable, LEN(b.physicaltable) + 1, 200) COLLATE Latin1_General_BIN NOT LIKE N'%[^a-z0-9_]%'
+)
+SELECT physicaltable,
+       COALESCE(basetable, physicaltable) AS basetable,
+       SUBSTRING(COALESCE(basetable, physicaltable), LEN(@process) + 1, 200) AS [view],
+       CASE
+           WHEN basetable IS NULL THEN N'base'
+           WHEN LEN(physicaltable) - LEN(basetable) = 2 THEN N'lang:' + SUBSTRING(physicaltable, LEN(basetable) + 1, 200)
+           ELSE N'env:' + SUBSTRING(physicaltable, LEN(basetable) + 1, 200)
+       END AS layer
+FROM classified
+WHERE rn = 1;
+GO
