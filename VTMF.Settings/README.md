@@ -55,3 +55,14 @@ Docker (HTTP):
 
 Tools: list_clients, module_status, list_processes, list_tables, get_settings, get_effective_settings,
 settings_usage, legacy_env_rows. ServerSetting values are always masked.
+
+Claude Code plugin (recommended). The repo is a plugin marketplace; the `vtmf-settings` plugin bundles the
+HTTP MCP connection (`http://localhost:8081/mcp`) and the `sm-module` skill, which guides Claude to check
+and install the `sm` module for a client before working with it:
+
+    /plugin marketplace add neemevool/settingmanager
+    /plugin install vtmf-settings@vtmf
+
+Update with `/plugin marketplace update vtmf` (then `/reload-plugins`). To use a different MCP URL, set the
+`VTMF_SETTINGS_MCP_URL` environment variable before starting Claude Code. Remove any manually added
+`vtmf-settings` MCP entry (`claude mcp remove vtmf-settings`) first, otherwise the tools appear twice.

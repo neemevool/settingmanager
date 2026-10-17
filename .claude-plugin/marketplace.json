@@ -1,0 +1,14 @@
+{
+  "name": "vtmf",
+  "description": "VTMF settings management plugins",
+  "owner": {
+    "name": "VTMF"
+  },
+  "plugins": [
+    {
+      "name": "vtmf-settings",
+      "source": "./plugins/vtmf-settings",
+      "description": "VTMF settings management MCP connection and sm module install skill"
+    }
+  ]
+}
