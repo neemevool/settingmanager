@@ -1,3 +1,6 @@
+-- Raw sources for the backend settings catalogue; SmClient scans the definitions and assembles the rows.
+-- Result set 1: processes (requested process and parent in scope, plus SETTINGPROCEDURES targets).
+-- Result set 2: candidate module definitions. Result set 3: masked ServerProcessSettings rows of those processes.
 CREATE OR ALTER PROCEDURE sm.GetSettingsUsage
     @process    nvarchar(100),
     @namePrefix nvarchar(200) = NULL
@@ -13,37 +16,38 @@ BEGIN
     DECLARE @mask nvarchar(10) = N'********';
     DECLARE @alias nvarchar(100) = (SELECT TOP (1) NULLIF(SETTINGPROCEDURES, NAME) FROM dbo.processtypes WHERE NAME = @process);
 
-    -- group 1 = setting name, group 2 = default expression
-    DECLARE @psvPattern nvarchar(400) =
-        N'GetPSV[IB]?\s*\(\s*@\w+\s*,\s*N?''([^'']+)''\s*,\s*(N?''(?:[^'']|'''')*''|[^)]*)\)';
-    -- group 1 = process argument, group 2 = setting name, group 3 = default expression
-    DECLARE @legacyPattern nvarchar(400) =
-        N'GetProcessSettingValue(?:Int|Dec)?\s*\(\s*(N?''\w+''|@\w+)\s*,\s*N?''([^'']+)''\s*,\s*[^,]+,\s*(N?''(?:[^'']|'''')*''|[^)]*)\)';
-    DECLARE @psvCallPattern nvarchar(100) = N'GetPSV[IB]?\s*\(';
-    DECLARE @legacyCallPattern nvarchar(100) = N'GetProcessSettingValue(?:Int|Dec)?\s*\(';
-    DECLARE @directPattern nvarchar(200) = N'from\s+(?:\[?dbo\]?\.)?\[?ServerProcessSettings\]?';
-
     CREATE TABLE #procs (name nvarchar(100) NOT NULL PRIMARY KEY);
     INSERT INTO #procs (name) VALUES (@process);
     IF @alias IS NOT NULL
         INSERT INTO #procs (name) VALUES (@alias);
 
-    CREATE TABLE #tally (n int NOT NULL PRIMARY KEY);
-    INSERT INTO #tally (n)
-    SELECT TOP (2000) ROW_NUMBER() OVER (ORDER BY (SELECT NULL))
-    FROM sys.all_objects AS a CROSS JOIN sys.all_objects AS b;
+    -- In-scope processes plus the processes legacy reads map to (SETTINGPROCEDURES), each with its raw mapping
+    CREATE TABLE #allprocs
+    (
+        name              nvarchar(100) NOT NULL PRIMARY KEY,
+        settingprocedures nvarchar(100) NULL,
+        inscope           bit           NOT NULL
+    );
+    INSERT INTO #allprocs (name, inscope)
+    SELECT p.name, 1 FROM #procs AS p;
+    INSERT INTO #allprocs (name, inscope)
+    SELECT DISTINCT pt.SETTINGPROCEDURES, 0
+    FROM dbo.processtypes AS pt
+    JOIN #procs AS p ON pt.NAME = p.name
+    WHERE pt.SETTINGPROCEDURES IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM #procs AS q WHERE q.name = pt.SETTINGPROCEDURES);
+    UPDATE a
+       SET settingprocedures = (SELECT TOP (1) pt.SETTINGPROCEDURES FROM dbo.processtypes AS pt WHERE pt.NAME = a.name)
+    FROM #allprocs AS a;
 
-    -- Candidate modules and their attribution to the requested process (or its parent)
+    -- Candidate modules (attribution and parsing happen in SmClient)
     CREATE TABLE #mods
     (
-        procname       sysname       NOT NULL PRIMARY KEY,
-        definition     nvarchar(max) NOT NULL,
-        literalprocess nvarchar(100) NULL,
-        attribution    nvarchar(10)  NULL
+        procname   sysname       NOT NULL PRIMARY KEY,
+        definition nvarchar(max) NOT NULL
     );
-    INSERT INTO #mods (procname, definition, literalprocess)
-    SELECT o.name, m.definition,
-           REGEXP_SUBSTR(m.definition, N'GetProcessSettingValues\s*\(\s*N?''(\w+)''', 1, 1, 'i', 1)
+    INSERT INTO #mods (procname, definition)
+    SELECT o.name, m.definition
     FROM sys.sql_modules AS m
     JOIN sys.objects AS o ON o.object_id = m.object_id
     WHERE o.schema_id = SCHEMA_ID(N'dbo')
@@ -51,147 +55,26 @@ BEGIN
                          N'GetProcessSettingValueDec', N'GetProcessSettingValues', N'ShowAllServerSettings')
       AND (m.definition LIKE N'%GetPSV%' OR m.definition LIKE N'%GetProcessSettingValue%' OR m.definition LIKE N'%ServerProcessSettings%');
 
-    UPDATE md
-       SET attribution = CASE
-                             WHEN md.literalprocess IN (SELECT name FROM #procs) THEN N'literal'
-                             WHEN md.literalprocess IS NULL
-                                  AND EXISTS (SELECT 1 FROM #procs AS p WHERE md.procname LIKE N'%' + p.name + N'%') THEN N'procname'
-                         END
-    FROM #mods AS md;
+    SELECT a.name, a.settingprocedures, a.inscope
+    FROM #allprocs AS a
+    ORDER BY a.inscope DESC, a.name;
 
-    CREATE TABLE #usage
-    (
-        settingname   nvarchar(200)  NULL,
-        procedurename sysname        NULL,
-        callstyle     nvarchar(10)   NOT NULL,
-        attribution   nvarchar(10)   NULL,
-        defaultincode nvarchar(1600) NULL,
-        detail        nvarchar(400)  NULL,
-        -- legacy rows only: the process dbo.GetProcessSettingValue actually reads (after its SETTINGPROCEDURES mapping)
-        legacyprocess nvarchar(100)  NULL
-    );
-
-    -- @psv reads (recommended pattern)
-    INSERT INTO #usage (settingname, procedurename, callstyle, attribution, defaultincode)
-    SELECT REGEXP_SUBSTR(md.definition, @psvPattern, 1, t.n, 'i', 1),
-           md.procname, N'psv', md.attribution,
-           REGEXP_SUBSTR(md.definition, @psvPattern, 1, t.n, 'i', 2)
+    SELECT md.procname, md.definition
     FROM #mods AS md
-    JOIN #tally AS t ON t.n <= REGEXP_COUNT(md.definition, @psvPattern, 1, 'i')
-    WHERE md.attribution IS NOT NULL;
+    ORDER BY md.procname;
 
-    -- Legacy per-setting reads; attribution comes from the call's own process argument when it is a literal
-    -- (legacyprocess mirrors the runtime: coalesce((select top 1 settingprocedures from processtypes where name = @p), @p))
-    INSERT INTO #usage (settingname, procedurename, callstyle, attribution, defaultincode, legacyprocess)
-    SELECT y.settingname, y.procname, N'legacy',
-           CASE
-               WHEN y.literalprocess IN (SELECT name FROM #procs) THEN N'literal'
-               WHEN y.literalprocess IS NULL
-                    AND EXISTS (SELECT 1 FROM #procs AS p WHERE y.procname LIKE N'%' + p.name + N'%') THEN N'procname'
-           END,
-           y.defaultincode,
-           COALESCE((SELECT TOP (1) pt.SETTINGPROCEDURES FROM dbo.processtypes AS pt
-                     WHERE pt.NAME = COALESCE(y.literalprocess, @process)),
-                    COALESCE(y.literalprocess, @process))
+    -- ServerSetting values never leave the database
+    SELECT x.process, x.settingname, x.workercode, x.value, x.isempty
     FROM (
-        SELECT md.procname,
-               CASE WHEN LEFT(x.processarg, 1) = N'@' THEN NULL ELSE sm.UnquoteSqlLiteral(x.processarg) END AS literalprocess,
-               x.settingname,
-               x.defaultincode
-        FROM #mods AS md
-        JOIN #tally AS t ON t.n <= REGEXP_COUNT(md.definition, @legacyPattern, 1, 'i')
-        CROSS APPLY (SELECT REGEXP_SUBSTR(md.definition, @legacyPattern, 1, t.n, 'i', 1) AS processarg,
-                            REGEXP_SUBSTR(md.definition, @legacyPattern, 1, t.n, 'i', 2) AS settingname,
-                            REGEXP_SUBSTR(md.definition, @legacyPattern, 1, t.n, 'i', 3) AS defaultincode) AS x
-    ) AS y
-    WHERE y.literalprocess IN (SELECT name FROM #procs)
-       OR (y.literalprocess IS NULL AND EXISTS (SELECT 1 FROM #procs AS p WHERE y.procname LIKE N'%' + p.name + N'%'));
-
-    -- Calls the patterns could not parse (e.g. setting name passed as a variable)
-    INSERT INTO #usage (settingname, procedurename, callstyle, attribution, detail)
-    SELECT NULL, md.procname, N'unparsed', md.attribution, CAST(c.unparsed AS nvarchar(10))
-    FROM #mods AS md
-    CROSS APPLY (SELECT REGEXP_COUNT(md.definition, @psvCallPattern, 1, 'i')
-                      + REGEXP_COUNT(md.definition, @legacyCallPattern, 1, 'i')
-                      - REGEXP_COUNT(md.definition, @psvPattern, 1, 'i')
-                      - REGEXP_COUNT(md.definition, @legacyPattern, 1, 'i') AS unparsed) AS c
-    WHERE md.attribution IS NOT NULL AND c.unparsed > 0;
-
-    -- Direct reads of ServerProcessSettings (anti-pattern)
-    INSERT INTO #usage (settingname, procedurename, callstyle, attribution, detail)
-    SELECT NULL, md.procname, N'direct', md.attribution, N'ServerProcessSettings'
-    FROM #mods AS md
-    WHERE md.attribution IS NOT NULL
-      AND REGEXP_COUNT(md.definition, @directPattern, 1, 'i') > 0;
-
-    -- Effective value as dbo.GetProcessSettingValues resolves it: rank process over parent INCLUDING empty
-    -- values, then keep the winner only when it is non-empty (an empty process value hides the parent).
-    WITH ranked AS
-    (
-        SELECT SUBSTRING(s.NAME, LEN(p.name) + 2, 200) AS settingname,
-               s.VALUE AS rawvalue,
+        SELECT p.name AS process,
+               SUBSTRING(s.NAME, LEN(p.name) + 2, 200) AS settingname,
+               s.workercode AS workercode,
                CASE WHEN s.settingtype = N'ServerSetting' THEN @mask ELSE s.VALUE END AS value,
-               CASE WHEN p.name = @process THEN N'process' ELSE N'parent' END AS configuredin,
-               ROW_NUMBER() OVER (PARTITION BY SUBSTRING(s.NAME, LEN(p.name) + 2, 200)
-                                  ORDER BY CASE WHEN p.name = @process THEN 1 ELSE 2 END) AS rn
+               CAST(CASE WHEN s.VALUE IS NULL OR s.VALUE = N'' THEN 1 ELSE 0 END AS bit) AS isempty
         FROM dbo.ServerProcessSettings AS s
-        JOIN #procs AS p ON LEFT(s.NAME, LEN(p.name) + 1) = p.name + N'.'
-        WHERE s.workercode = N'ALL'
-    ),
-    cfg AS
-    (
-        SELECT r.settingname, r.value, r.configuredin
-        FROM ranked AS r
-        WHERE r.rn = 1 AND r.rawvalue <> N''
-    ),
-    workers AS
-    (
-        SELECT SUBSTRING(s.NAME, LEN(@process) + 2, 200) AS settingname, COUNT(*) AS cnt
-        FROM dbo.ServerProcessSettings AS s
-        WHERE LEFT(s.NAME, LEN(@process) + 1) = @process + N'.' AND s.workercode <> N'ALL'
-        GROUP BY SUBSTRING(s.NAME, LEN(@process) + 2, 200)
-    ),
-    allrows AS
-    (
-        SELECT u.settingname, u.procedurename, u.callstyle, u.attribution,
-               sm.UnquoteSqlLiteral(u.defaultincode) AS defaultincode, u.detail, CAST(0 AS bit) AS unused,
-               u.legacyprocess
-        FROM #usage AS u
-        UNION ALL
-        SELECT c.settingname, NULL, N'none', NULL, NULL, NULL, CAST(1 AS bit), NULL
-        FROM cfg AS c
-        WHERE c.configuredin = N'process'
-          AND NOT EXISTS (SELECT 1 FROM #usage AS u WHERE u.settingname = c.settingname)
-    )
-    SELECT a.settingname,
-           a.procedurename,
-           a.callstyle,
-           a.attribution,
-           a.defaultincode,
-           CASE WHEN a.callstyle = N'legacy' THEN lv.value ELSE c.value END              AS configuredvalue,
-           CASE WHEN a.callstyle = N'legacy' THEN lv.configuredin ELSE c.configuredin END AS configuredin,
-           CASE WHEN a.callstyle = N'legacy' THEN lw.cnt ELSE ISNULL(w.cnt, 0) END        AS workeroverrides,
-           a.unused,
-           a.detail
-    FROM allrows AS a
-    LEFT JOIN cfg AS c ON c.settingname = a.settingname
-    LEFT JOIN workers AS w ON w.settingname = a.settingname
-    -- legacy calls (dbo.GetProcessSettingValue) read only the mapped process's own rows, with no parent fallback;
-    -- an empty value yields NULL there, not the parent's value
-    OUTER APPLY (SELECT TOP (1)
-                        CASE WHEN s.settingtype = N'ServerSetting' THEN @mask ELSE s.VALUE END AS value,
-                        CASE WHEN a.legacyprocess = @process THEN N'process' ELSE N'parent' END AS configuredin
-                 FROM dbo.ServerProcessSettings AS s
-                 WHERE a.callstyle = N'legacy'
-                   AND s.NAME = a.legacyprocess + N'.' + a.settingname
-                   AND s.workercode = N'ALL'
-                   AND s.VALUE <> N'') AS lv
-    OUTER APPLY (SELECT COUNT(*) AS cnt
-                 FROM dbo.ServerProcessSettings AS s
-                 WHERE a.callstyle = N'legacy'
-                   AND s.NAME = a.legacyprocess + N'.' + a.settingname
-                   AND s.workercode <> N'ALL') AS lw
-    WHERE @namePrefix IS NULL OR LEFT(a.settingname, LEN(@namePrefix)) = @namePrefix
-    ORDER BY CASE WHEN a.settingname IS NULL THEN 1 ELSE 0 END, a.settingname, a.procedurename, a.callstyle;
+        JOIN #allprocs AS p ON LEFT(s.NAME, LEN(p.name) + 1) = p.name + N'.'
+    ) AS x
+    WHERE @namePrefix IS NULL OR LEFT(x.settingname, LEN(@namePrefix)) = @namePrefix
+    ORDER BY x.process, x.settingname, x.workercode;
 END
 GO

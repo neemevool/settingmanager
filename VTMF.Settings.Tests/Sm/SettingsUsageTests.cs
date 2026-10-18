@@ -1,3 +1,5 @@
+using System.Globalization;
+using Microsoft.Data.SqlClient;
 using VTMF.Settings.Tests.Sql;
 
 namespace VTMF.Settings.Tests.Sm;
@@ -63,5 +65,31 @@ public sealed class SettingsUsageTests(SqlServerFixture fixture)
         var usage = await fixture.Sm.GetSettingsUsageAsync(Client, "tproc");
 
         Assert.NotEmpty(usage);
+    }
+
+    [Fact]
+    public async Task Procedure_NeverReturnsServerSettingValue()
+    {
+        await using var connection = new SqlConnection(fixture.Connections.GetConnectionString(Client));
+        await connection.OpenAsync();
+        await using var command = new SqlCommand("EXEC sm.GetSettingsUsage @process = N'tproc'", connection);
+        await using var reader = await command.ExecuteReaderAsync();
+
+        var values = new List<string>();
+        var resultSets = 0;
+        do
+        {
+            resultSets++;
+            while (await reader.ReadAsync())
+            {
+                for (var i = 0; i < reader.FieldCount; i++)
+                    values.Add(Convert.ToString(reader.GetValue(i), CultureInfo.InvariantCulture) ?? string.Empty);
+            }
+        }
+        while (await reader.NextResultAsync());
+
+        Assert.DoesNotContain("secret-key", values);
+        Assert.Contains("********", values);
+        Assert.Equal(3, resultSets);
     }
 }

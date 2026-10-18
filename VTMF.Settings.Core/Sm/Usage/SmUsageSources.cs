@@ -15,7 +15,7 @@ internal sealed class SmUsageModule
     public string Definition { get; set; } = string.Empty;
 }
 
-/// <summary>A ServerProcessSettings row split into process and setting name. <see cref="Value"/> is already masked; <see cref="IsEmpty"/> is computed by SQL.</summary>
+/// <summary>A ServerProcessSettings row split into process and setting name. <see cref="Value"/> is already masked; <see cref="IsEmpty"/> is true for NULL or blank VALUE (computed in SQL).</summary>
 internal sealed class SmUsageSetting
 {
     public string Process { get; set; } = string.Empty;

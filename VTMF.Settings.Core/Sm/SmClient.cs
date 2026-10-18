@@ -1,6 +1,7 @@
 using System.Data;
 using Dapper;
 using Microsoft.Data.SqlClient;
+using VTMF.Settings.Core.Sm.Usage;
 using VTMF.Settings.Services;
 
 namespace VTMF.Settings.Core.Sm;
@@ -59,9 +60,29 @@ public sealed class SmClient(SqlConnectionProvider connections, SmScriptSet scri
         }
     }
 
-    public Task<IReadOnlyList<SmSettingUsage>> GetSettingsUsageAsync(
-        string client, string process, string? namePrefix = null, CancellationToken cancellationToken = default) =>
-        QueryAsync<SmSettingUsage>(client, "sm.GetSettingsUsage", new { process, namePrefix }, cancellationToken);
+    public async Task<IReadOnlyList<SmSettingUsage>> GetSettingsUsageAsync(
+        string client, string process, string? namePrefix = null, CancellationToken cancellationToken = default)
+    {
+        await EnsureUpToDateAsync(client, cancellationToken).ConfigureAwait(false);
+        await using var connection = connections.GetConnection(client);
+        SmUsageSources sources;
+        try
+        {
+            var command = new CommandDefinition("sm.GetSettingsUsage", new { process, namePrefix },
+                commandType: CommandType.StoredProcedure, cancellationToken: cancellationToken);
+            using var grid = await connection.QueryMultipleAsync(command).ConfigureAwait(false);
+            var processes = (await grid.ReadAsync<SmUsageProcess>().ConfigureAwait(false)).AsList();
+            var modules = (await grid.ReadAsync<SmUsageModule>().ConfigureAwait(false)).AsList();
+            var settings = (await grid.ReadAsync<SmUsageSetting>().ConfigureAwait(false)).AsList();
+            sources = new SmUsageSources(processes, modules, settings);
+        }
+        catch (SqlException ex) when (SmException.TryTranslate(ex, out var translated))
+        {
+            throw translated;
+        }
+
+        return SettingsUsageBuilder.Build(process, namePrefix, sources);
+    }
 
     public Task<IReadOnlyList<SmLegacyEnvRow>> GetLegacyEnvRowsAsync(string client, string process, CancellationToken cancellationToken = default) =>
         QueryAsync<SmLegacyEnvRow>(client, "sm.GetLegacyEnvRows", new { process }, cancellationToken);

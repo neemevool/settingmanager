@@ -156,7 +156,7 @@ Module version recorded in `sm.moduleinfo`. Errors: `THROW` with stable numbers 
 | `sm.GetTables @process` | Physical tables per view and layer, row counts, overriding `Get…Info` procedure (active/dash) |
 | `sm.GetSettings @process, @table, @layer, @namePrefix` | Raw rows in API shape; `ServerSetting` values masked |
 | `sm.GetEffectiveSettings @process, @table, @environment, @language` | Effective rows with source layer; frontend replicates WS `LayoutListSettingReader` (incl. alias table candidates), backend replicates `GetProcessSettingValues` |
-| `sm.GetSettingsUsage @process, @namePrefix` | Backend catalogue: `REGEXP_*` scan of `sys.sql_modules` for `GetPSV*`, `GetProcessSettingValue*`, direct table reads; per (setting, procedure): call style (`psv`/`legacy`/`direct`), default in code, configured value per layer; plus configured-but-unused settings |
+| `sm.GetSettingsUsage @process, @namePrefix` | Backend catalogue: returns candidate `sys.sql_modules` definitions plus masked configuration; `SmClient` scans them (.NET regex) and assembles the catalogue for `GetPSV*`, `GetProcessSettingValue*`, direct table reads; per (setting, procedure): call style (`psv`/`legacy`/`direct`), default in code, configured value per layer; plus configured-but-unused settings |
 | `sm.GetLegacyEnvRows @process` | Base-table rows whose `workercode` is an environment name |
 
 ### 5.2 Plan engine (phase 2)
