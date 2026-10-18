@@ -73,8 +73,8 @@ Remove the manual entry (`claude mcp remove vtmf-settings`) before installing th
 From the repo root. Bump the tags, then update `composeprod.yaml` and the root `README.md` to match:
 
 ```bash
-docker build --tag vtmf/settingsmanager:v2.17 --attest type=sbom,generator=docker/scout-sbom-indexer:latest --pull --push .
-docker build -f Dockerfile.mcp --tag vtmf/settingsmanager-mcp:v2.17 --attest type=sbom,generator=docker/scout-sbom-indexer:latest --pull --push .
+docker build --tag vtmf/settingsmanager:v2.17 --platform linux/amd64,linux/arm64 --attest type=sbom,generator=docker/scout-sbom-indexer:latest --pull --push .
+docker build -f Dockerfile.mcp --platform linux/amd64,linux/arm64 --tag vtmf/settingsmanager-mcp:v2.17 --attest type=sbom,generator=docker/scout-sbom-indexer:latest --pull --push .
 ```
 
 Production: `composeprod.yaml` (MCP bound to `127.0.0.1:8081`, the MCP server has no authentication).

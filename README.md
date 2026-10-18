@@ -74,6 +74,13 @@ docker compose --env-file settings.env pull
 docker compose --env-file settings.env up -d
 ```
 
+If you want to repull the images:
+
+```bash
+docker compose --env-file settings.env up -d --pull always
+```
+
+
 `--env-file settings.env` makes `SQL_SCRIPTS_PATH` available to the `compose.yaml` volume mapping; `env_file:`
 in the services passes the connection settings to the containers.
 
