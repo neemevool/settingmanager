@@ -1,80 +1,80 @@
-## Push to dockerhub
+# VTMF Settings Manager: development
+
+For running the released images see the [root README](../README.md).
+
+## Projects
+
+| Project | Purpose |
+|---|---|
+| `VTMF.Settings` | Blazor Server web UI |
+| `VTMF.Settings.Core` | Shared services, `sm` module scripts (`Sql/settingsmanagement/`) and installer |
+| `VTMF.Settings.Mcp` | MCP server over the `sm` procedures |
+| `VTMF.Settings.Tests` | Tests |
+| `plugins/vtmf-settings` | Claude Code plugin (MCP connection + `sm-module` skill) |
+
+## Build and test
+
+Always use the wrapper from the repo root (direct `dotnet build` / `dotnet test` is blocked by a hook):
 
 ```bash
-docker build --tag vtmf/settingsmanager:v2.16 --attest type=sbom,generator=docker/scout-sbom-indexer:latest --pull --push .
+pwsh -NoProfile -File ./eng/verify.ps1 -Mode build
+pwsh -NoProfile -File ./eng/verify.ps1 -Mode test -Filter "<filter>"
+pwsh -NoProfile -File ./eng/verify.ps1 -Mode warnings [-Target <project>]
+pwsh -NoProfile -File ./eng/verify.ps1 -Mode gate     # must pass before finishing
+```
+
+## Connections
+
+Connections use `SqlConnectionParameters`, from user secrets in development or from environment variables /
+`settings.env` (see the root README for the format).
+
+## Run locally
+
+```bash
+cd VTMF.Settings
+dotnet run --launch-profile http     # http://localhost:5045
+dotnet run --launch-profile https    # https://localhost:7188
+```
+
+Docker, built from source (repo root, uses `compose.yaml`):
+
+```bash
+docker compose --env-file settings.env up -d --build
+docker compose --env-file settings.env up -d --build vtmf-settings-mcp   # MCP server only
+```
+
+## MCP server locally (stdio)
+
+Build once, then register the built dll. Don't use `dotnet run`: its build output corrupts stdio.
+
+```bash
+pwsh -NoProfile -File ./eng/verify.ps1 -Mode build
+claude mcp add vtmf-settings -- dotnet C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Mcp\bin\Debug\net10.0\VTMF.Settings.Mcp.dll
+```
+
+Or against the Docker container (HTTP):
+
+```bash
+claude mcp add --transport http vtmf-settings http://localhost:8081/mcp
+```
+
+Remove the manual entry (`claude mcp remove vtmf-settings`) before installing the plugin.
+
+## Change rules
+
+- Any change under `VTMF.Settings.Core/Sql/settingsmanagement/` requires bumping `version` and updating `sha256`
+  in `module.json`. The failing `RecordedHash_MatchesScripts` test shows the new hash as the Expected value in
+  two 32-char halves; concatenate them. Scripts must be idempotent, no `BEGIN TRAN`.
+- When anything under `plugins/vtmf-settings/` changes, bump `version` in
+  `plugins/vtmf-settings/.claude-plugin/plugin.json`.
+
+## Release: push to Docker Hub
+
+From the repo root. Bump the tags, then update `composeprod.yaml` and the root `README.md` to match:
+
+```bash
+docker build --tag vtmf/settingsmanager:v2.17 --attest type=sbom,generator=docker/scout-sbom-indexer:latest --pull --push .
 docker build -f Dockerfile.mcp --tag vtmf/settingsmanager-mcp:v2.17 --attest type=sbom,generator=docker/scout-sbom-indexer:latest --pull --push .
 ```
-## Docker compose stack
 
-```yaml
-services:
-  vtmf-settings:
-    image: vtmf/settingsmanager:v2.16
-    ports:
-      - "8080:8080"
-    env_file: settings.env
-    environment:
-      ASPNETCORE_ENVIRONMENT: Production
-    volumes:
-      - data-protection-keys:/app/keys
-
-  vtmf-settings-mcp:
-    image: vtmf/settingsmanager-mcp:v2.17
-    ports:
-      - "127.0.0.1:8081:8080"
-    env_file: settings.env
-
-volumes:
-  data-protection-keys:
-```
-
-### Environment variables in settings.env
-```env
-ENVVAR=Loaded
-SQLCONNECTIONPARAMETERS__0__CLIENTNAME=DefaultMetaBase
-SQLCONNECTIONPARAMETERS__0__SERVER=Server=tcp:demoterminal.vtmf.ee,7777;Initial Catalog=dev_iconfit;Persist Security Info=False;MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=True;Connection Timeout=30;
-SQLCONNECTIONPARAMETERS__0__USERID=henryvool
-SQLCONNECTIONPARAMETERS__0__PASSWORD=********
-
-SQLCONNECTIONPARAMETERS__1__CLIENTNAME=prod-hydraulic
-SQLCONNECTIONPARAMETERS__1__SERVER=Server=tcp:a320ladu.pilveserv.eu,9999;Initial Catalog=prod_hydraulic;Persist Security Info=False;MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=True;Connection Timeout=30;
-SQLCONNECTIONPARAMETERS__1__USERID=henryvool
-SQLCONNECTIONPARAMETERS__1__PASSWORD=**********
-```
-
-## Settings management MCP server (VTMF.Settings.Mcp)
-
-MCP tools over the `sm` procedures. Each client database needs the `sm` module before its tools work;
-`module_status` reports it and `install_module` installs or upgrades it (scripts ship inside the MCP image,
-so the Installer page set is no longer used). In production the MCP service is defined in `composeprod.yaml`,
-bound to `127.0.0.1:8081` only because the MCP server has no authentication.
-
-Connections are configured exactly like VTMF.Settings (`SqlConnectionParameters` via user secrets or
-environment variables / `settings.env`). Modifications are attributed to the SQL login of the connection.
-
-Local (stdio) — build once, then register the built dll (not `dotnet run`, whose build output would corrupt stdio):
-
-    dotnet build VTMF.Settings.Mcp
-    claude mcp add vtmf-settings -- dotnet C:\PROJECTS\VTMF\Settingmanager\VTMF.Settings.Mcp\bin\Debug\net10.0\VTMF.Settings.Mcp.dll
-
-Docker (HTTP). If you override `VTMF_SETTINGS_MCP_URL` to a host other than localhost/127.0.0.1, `AllowedHosts` must include that host (env var `AllowedHosts`):
-
-    docker compose up -d vtmf-settings-mcp
-    claude mcp add --transport http vtmf-settings http://localhost:8081/mcp
-
-Tools: list_clients, module_status, install_module, list_processes, list_tables, get_settings, get_effective_settings,
-settings_usage, legacy_env_rows. ServerSetting values are always masked.
-
-Claude Code plugin (recommended). The repo (github.com/neemevool/settingmanager) is private, so your git
-credentials must have access before `/plugin marketplace add` works (e.g. `gh auth login` then
-`gh auth setup-git`, or an SSH key / credential helper that works without prompting); otherwise the clone fails.
-The repo is a plugin marketplace; the `vtmf-settings` plugin bundles the
-HTTP MCP connection (`http://localhost:8081/mcp`) and the `sm-module` skill, which guides Claude to check
-and install the `sm` module for a client before working with it:
-
-    /plugin marketplace add neemevool/settingmanager
-    /plugin install vtmf-settings@vtmf
-
-Update with `/plugin marketplace update vtmf` (then `/reload-plugins`). To use a different MCP URL, set the
-`VTMF_SETTINGS_MCP_URL` environment variable before starting Claude Code. Remove any manually added
-`vtmf-settings` MCP entry (`claude mcp remove vtmf-settings`) first, otherwise the tools appear twice.
+Production: `composeprod.yaml` (MCP bound to `127.0.0.1:8081`, the MCP server has no authentication).

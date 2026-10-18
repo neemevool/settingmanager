@@ -1,6 +1,6 @@
 services:
   vtmf-settings:
-    image: vtmf/settingsmanager:v2.16
+    image: vtmf/settingsmanager:v2.17
     ports:
       - "8080:8080"
     env_file: settings.env
