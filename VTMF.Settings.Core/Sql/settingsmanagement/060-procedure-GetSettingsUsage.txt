@@ -53,7 +53,13 @@ BEGIN
     WHERE o.schema_id = SCHEMA_ID(N'dbo')
       AND o.name NOT IN (N'GetPSV', N'GetPSVI', N'GetPSVB', N'GetProcessSettingValue', N'GetProcessSettingValueInt',
                          N'GetProcessSettingValueDec', N'GetProcessSettingValues', N'ShowAllServerSettings')
-      AND (m.definition LIKE N'%GetPSV%' OR m.definition LIKE N'%GetProcessSettingValue%' OR m.definition LIKE N'%ServerProcessSettings%');
+      AND (m.definition LIKE N'%GetPSV%' OR m.definition LIKE N'%GetProcessSettingValue%' OR m.definition LIKE N'%ServerProcessSettings%')
+      -- A module only yields rows when an in-scope process occurs in its name (procname attribution) or as a quoted
+      -- literal in its definition (SmClient only takes 'name' literals): a superset of what SmClient attributes,
+      -- case-insensitive like SmClient. Quoting matters: GetProcessSettingValues itself contains e.g. 'tProc'.
+      AND EXISTS (SELECT 1 FROM #procs AS p
+                  WHERE CHARINDEX(p.name COLLATE Latin1_General_100_CI_AS, o.name COLLATE Latin1_General_100_CI_AS) > 0
+                     OR CHARINDEX((N'''' + p.name + N'''') COLLATE Latin1_General_100_CI_AS, m.definition COLLATE Latin1_General_100_CI_AS) > 0);
 
     SELECT a.name, a.settingprocedures, a.inscope
     FROM #allprocs AS a

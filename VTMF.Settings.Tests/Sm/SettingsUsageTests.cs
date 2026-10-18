@@ -76,20 +76,26 @@ public sealed class SettingsUsageTests(SqlServerFixture fixture)
         await using var reader = await command.ExecuteReaderAsync();
 
         var values = new List<string>();
+        var modules = new List<string>();
         var resultSets = 0;
         do
         {
             resultSets++;
             while (await reader.ReadAsync())
             {
+                if (resultSets == 2)
+                    modules.Add(reader.GetString(0));
                 for (var i = 0; i < reader.FieldCount; i++)
                     values.Add(Convert.ToString(reader.GetValue(i), CultureInfo.InvariantCulture) ?? string.Empty);
             }
         }
         while (await reader.NextResultAsync());
 
-        Assert.DoesNotContain("secret-key", values);
+        Assert.DoesNotContain(values, v => v.Contains("secret-key", StringComparison.Ordinal));
         Assert.Contains("********", values);
         Assert.Equal(3, resultSets);
+        Assert.Contains("GetDocumentsFortproc", modules);
+        // Its definition references only 'tother', so it is not a candidate for tproc.
+        Assert.DoesNotContain("GetDocumentsFortother", modules);
     }
 }

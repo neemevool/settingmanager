@@ -26,7 +26,7 @@ Use cases served (database side):
 | D5 | Plans may be applied by the agent after showing the plan; gate = MCP tool permission prompt + plan checksum |
 | D6 | Feature model redesigned as "feature = named desired state with parameters"; one plan engine for all writes |
 | D7 | Canonical environment layer = separate table `{table}{environment}`; environment rows in the base table are legacy |
-| D8 | Target SQL Server 2025 (native `json`, `REGEXP_*`) |
+| D8 | Supported floor SQL Server 2019 (compatibility level 150): customers run older servers, so no `json` type or `REGEXP_*`; definition parsing runs in `SmClient` (.NET regex) |
 | D9 | No authentication in v1 (local use is intentional); modification identity = SQL login of the connection |
 | D10 | SPA settings catalogue is a separate tool/subagent — out of scope |
 
@@ -39,7 +39,7 @@ VTMF.Settings.sln
 │    SmClient (typed wrappers over sm.*), SmOrchestrator (cross-DB operations), DTOs
 ├─ VTMF.Settings           Blazor UI → references Core (behaviour unchanged in phases 1–3)
 ├─ VTMF.Settings.Mcp       console app → references Core; ModelContextProtocol SDK
-└─ VTMF.Settings.Tests     xUnit + Testcontainers (SQL Server 2025)
+└─ VTMF.Settings.Tests     xUnit + Testcontainers (SQL Server 2019)
 
 database5/settingsmanagement/            install.xml set "settingsmanagement" (client DBs)
 database5/settingsmanagement/metabase/   install.xml set "settingsmetabase" (metabase DB, phase 3)
@@ -158,7 +158,7 @@ Module version recorded in `sm.moduleinfo`. Errors: `THROW` with stable numbers 
 | `sm.GetTables @process` | Physical tables per view and layer, row counts, overriding `Get…Info` procedure (active/dash) |
 | `sm.GetSettings @process, @table, @layer, @namePrefix` | Raw rows in API shape; `ServerSetting` values masked |
 | `sm.GetEffectiveSettings @process, @table, @environment, @language` | Effective rows with source layer; frontend replicates WS `LayoutListSettingReader` (incl. alias table candidates), backend replicates `GetProcessSettingValues` |
-| `sm.GetSettingsUsage @process, @namePrefix` | Backend catalogue: returns candidate `sys.sql_modules` definitions plus masked configuration; `SmClient` scans them (.NET regex) and assembles the catalogue for `GetPSV*`, `GetProcessSettingValue*`, direct table reads; per (setting, procedure): call style (`psv`/`legacy`/`direct`), default in code, configured value per layer; plus configured-but-unused settings |
+| `sm.GetSettingsUsage @process, @namePrefix` | Backend catalogue sources: in-scope processes, candidate `sys.sql_modules` definitions and masked `ServerProcessSettings` rows. `SmClient` scans the definitions (.NET regex) for `GetPSV*`, `GetProcessSettingValue*` and direct table reads, and builds one row per (setting, procedure) with call style (`psv`/`legacy`/`direct`/`unparsed`), default in code and configured value per layer, plus configured-but-unused settings |
 | `sm.GetLegacyEnvRows @process` | Base-table rows whose `workercode` is an environment name |
 
 ### 5.2 Plan engine (phase 2)
@@ -167,7 +167,7 @@ Tables:
 
 - `sm.plan`: `id`, `created`, `createdby` (`SUSER_SNAME()`), `process`, `description`, `source`
   (`manual` | `clone:{client}` | `feature:{name}@{version}` | `migration` | `rollback:{planid}`), `mode`,
-  `desired` (`json`), `checksum`, `status` (`Created` | `Applied` | `Failed` | `Stale` | `RolledBack`),
+  `desired` (`nvarchar(max)`, validated with `ISJSON`), `checksum`, `status` (`Created` | `Applied` | `Failed` | `Stale` | `RolledBack`),
   `appliedat`, `appliedby`, `message`.
 - `sm.planitem`: `planid`, `seq`, `physicaltable`, `workercode`, `action` (`CreateTable` | `Insert` | `Update` |
   `Delete`), after-image and before-image of NAME, VALUE, settingtype, LISTVALUE, ordernr.
@@ -175,7 +175,7 @@ Tables:
 
 Procedures:
 
-- `sm.CreatePlan @desired json, @description, @source, @options json` → validate, guardrails, diff (incl.
+- `sm.CreatePlan @desired, @description, @source, @options` (JSON as `nvarchar(max)`, validated with `ISJSON`) → validate, guardrails, diff (incl.
   renumbering), store; returns plan id, checksum, items, warnings. Errors → nothing stored. Empty diff → "no
   changes", no plan stored.
 - `sm.ApplyPlan @planid, @checksum` → single `SERIALIZABLE` transaction: verify checksum and status `Created`; verify
@@ -252,7 +252,7 @@ Metabase DDL brought under version control in `database5/settingsmanagement/meta
 
 ## 10. Testing
 
-- `VTMF.Settings.Tests` (xUnit, Testcontainers `mcr.microsoft.com/mssql/server:2019-latest` (supported floor)).
+- `VTMF.Settings.Tests` (xUnit; Testcontainers image `mcr.microsoft.com/mssql/server:2019-latest`, the supported floor).
 - Fixture installs sets `base` + `settingsmanagement` scripts from `database5` and seeds a sample process with
   frontend tables, an alias variant, env/lang overlays, a `ServerSetting`, a legacy env row, and procedures with
   `GetPSV` / legacy reads.

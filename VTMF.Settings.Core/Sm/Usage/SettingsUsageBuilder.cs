@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 
 namespace VTMF.Settings.Core.Sm.Usage;
 
@@ -8,14 +9,39 @@ internal static class SettingsUsageBuilder
     private const string AllWorkers = "ALL";
     private static readonly StringComparer Cmp = StringComparer.OrdinalIgnoreCase;
 
-    public static IReadOnlyList<SmSettingUsage> Build(string process, string? namePrefix, SmUsageSources sources)
+    public static IReadOnlyList<SmSettingUsage> Build(string process, string? namePrefix, SmUsageSources sources) =>
+        Build(process, namePrefix, sources, SettingsUsageScanner.Scan);
+
+    internal static IReadOnlyList<SmSettingUsage> Build(
+        string process, string? namePrefix, SmUsageSources sources, Func<string, SmModuleScan> scanModule)
     {
+        // SQL LEFT(x, LEN(@p)) = @p ignored trailing spaces of the prefix; keep that behaviour.
+        namePrefix = namePrefix?.TrimEnd(' ');
         var inScope = new HashSet<string>(sources.Processes.Where(p => p.InScope).Select(p => p.Name), Cmp);
 
         var usage = new List<(SmSettingUsage Row, string? LegacyProcess)>();
         foreach (var module in sources.Modules)
         {
-            var scan = SettingsUsageScanner.Scan(module.Definition);
+            SmModuleScan scan;
+            try
+            {
+                scan = scanModule(module.Definition);
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                // One pathological definition must not fail the whole catalogue; the literal process is unknown.
+                var procAttribution = Attribute(null, module.ProcName, inScope);
+                if (procAttribution is not null)
+                    usage.Add((new SmSettingUsage
+                    {
+                        ProcedureName = module.ProcName,
+                        CallStyle = "unparsed",
+                        Attribution = procAttribution,
+                        Detail = "timeout",
+                    }, null));
+                continue;
+            }
+
             var attribution = Attribute(scan.LiteralProcess, module.ProcName, inScope);
 
             if (attribution is not null)

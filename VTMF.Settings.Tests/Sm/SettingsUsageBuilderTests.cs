@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using VTMF.Settings.Core.Sm.Usage;
 
 namespace VTMF.Settings.Tests.Sm;
@@ -174,5 +175,63 @@ public sealed class SettingsUsageBuilderTests
         Assert.Equal(("psv", "True", "parent", 0), (join.CallStyle, join.ConfiguredValue, join.ConfiguredIn, join.WorkerOverrides));
         var newState = usage.Single(u => u.SettingName == "Document.State.Terminal.New");
         Assert.Equal(("VNEW", "process"), (newState.ConfiguredValue, newState.ConfiguredIn));
+    }
+
+    [Fact]
+    public void Build_NamePrefixWithTrailingSpace_MatchesTrimmedPrefix()
+    {
+        var expected = SettingsUsageBuilder.Build("tproc", "Document.", SeedTprocSources());
+
+        var usage = SettingsUsageBuilder.Build("tproc", "Document. ", SeedTprocSources());
+
+        Assert.NotEmpty(usage);
+        Assert.Equal(
+            expected.Select(u => (u.SettingName, u.ProcedureName, u.CallStyle)),
+            usage.Select(u => (u.SettingName, u.ProcedureName, u.CallStyle)));
+    }
+
+    [Fact]
+    public void Build_ScanTimeout_YieldsUnparsedRowAndContinues()
+    {
+        var sources = SeedTprocSources();
+
+        var usage = SettingsUsageBuilder.Build("tproc", null, sources, definition =>
+            definition == RegDocStateFortprocFinishedBody
+                ? throw new RegexMatchTimeoutException()
+                : SettingsUsageScanner.Scan(definition));
+
+        var timeout = Assert.Single(usage, u => u.ProcedureName == "RegDocStateFortprocFinished");
+        Assert.Equal(((string?)null, "unparsed", "procname", "timeout"), (timeout.SettingName, timeout.CallStyle, timeout.Attribution, timeout.Detail));
+        Assert.Contains(usage, u => u.SettingName == "Document.Query.Join" && u.CallStyle == "psv");
+    }
+
+    [Fact]
+    public void Build_LegacyLiteralInModuleWithoutOwnAttribution_IsAttributedLiteral()
+    {
+        var sources = new SmUsageSources(
+            [Process("tproc", null, true)],
+            [Module("SomeHelper", "select dbo.GetProcessSettingValue('tproc','X.Y',@w,'d')")],
+            [Setting("tproc", "X.Y", "ALL", "v")]);
+
+        var usage = SettingsUsageBuilder.Build("tproc", null, sources);
+
+        var row = Assert.Single(usage);
+        Assert.Equal(("X.Y", "SomeHelper", "legacy", "literal", "d", "v", "process"),
+            (row.SettingName, row.ProcedureName, row.CallStyle, row.Attribution, row.DefaultInCode, row.ConfiguredValue, row.ConfiguredIn));
+    }
+
+    [Fact]
+    public void Build_LegacyParameterProcess_UsesProcnameAndRequestedProcessMapping()
+    {
+        var sources = new SmUsageSources(
+            [Process("tproc", "tbase", true), Process("tbase", null, false)],
+            [Module("RegDocStateFortproc", "select dbo.GetProcessSettingValue(@process,'X.Y',@w,'d')")],
+            [Setting("tbase", "X.Y", "ALL", "fromBase"), Setting("tbase", "X.Y", "w1", "o")]);
+
+        var usage = SettingsUsageBuilder.Build("tproc", null, sources);
+
+        var row = Assert.Single(usage, u => u.CallStyle == "legacy");
+        Assert.Equal(("X.Y", "procname", "fromBase", "parent", 1),
+            (row.SettingName, row.Attribution, row.ConfiguredValue, row.ConfiguredIn, row.WorkerOverrides));
     }
 }

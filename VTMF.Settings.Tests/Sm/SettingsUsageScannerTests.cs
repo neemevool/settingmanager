@@ -72,6 +72,7 @@ public sealed class SettingsUsageScannerTests
         var read = Assert.Single(r.PsvReads);
         Assert.Equal("A.B", read.SettingName);
         // Raw default keeps trailing whitespace (as the SQL regex did); unquoting trims it.
+        Assert.Equal("'d'\r\n", read.DefaultRaw);
         Assert.Equal("d", SqlLiteral.Unquote(read.DefaultRaw));
         Assert.Equal(0, r.Unparsed);
     }
