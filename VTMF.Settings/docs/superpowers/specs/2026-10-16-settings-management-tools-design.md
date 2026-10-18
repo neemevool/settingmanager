@@ -144,6 +144,8 @@ For `ServerProcessSettings` only `base` is supported in v1.
 
 ## 5. `sm` procedures (client DB)
 
+`sm` scripts target SQL Server 2019 (compatibility level 150); no 2022+ syntax.
+
 Location: `database5/settingsmanagement/`, `###-type-name.txt` convention, idempotent, depends only on set `base`.
 Module version recorded in `sm.moduleinfo`. Errors: `THROW` with stable numbers in range 51000–51999.
 
@@ -250,7 +252,7 @@ Metabase DDL brought under version control in `database5/settingsmanagement/meta
 
 ## 10. Testing
 
-- `VTMF.Settings.Tests` (xUnit, Testcontainers `mcr.microsoft.com/mssql/server:2025-latest`).
+- `VTMF.Settings.Tests` (xUnit, Testcontainers `mcr.microsoft.com/mssql/server:2019-latest` (supported floor)).
 - Fixture installs sets `base` + `settingsmanagement` scripts from `database5` and seeds a sample process with
   frontend tables, an alias variant, env/lang overlays, a `ServerSetting`, a legacy env row, and procedures with
   `GetPSV` / legacy reads.

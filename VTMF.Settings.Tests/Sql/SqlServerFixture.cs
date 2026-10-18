@@ -30,7 +30,7 @@ public sealed class SqlServerFixture : IAsyncLifetime
         [ClientName, EmptyClientName, FreshClientName, UpgradeClientName, ConcurrentClientName, BrokenClientName, OutdatedClientName, NewerClientName, ToolFreshClientName, UnreachableClientName];
 
     private readonly MsSqlContainer _container = new MsSqlBuilder()
-        .WithImage("mcr.microsoft.com/mssql/server:2025-latest")
+        .WithImage("mcr.microsoft.com/mssql/server:2019-latest")
         .Build();
 
     public SqlConnectionProvider Connections { get; private set; } = null!;
@@ -46,7 +46,7 @@ public sealed class SqlServerFixture : IAsyncLifetime
         await _container.StartAsync();
         var master = _container.GetConnectionString();
 
-        // Client databases may still run at an older compatibility level after the server upgrade.
+        // Level 150 is the SQL Server 2019 maximum: the supported floor.
         await ExecuteAsync(master, "CREATE DATABASE smtest; ALTER DATABASE smtest SET COMPATIBILITY_LEVEL = 150; CREATE DATABASE smempty; CREATE DATABASE smfresh; CREATE DATABASE smupgrade; CREATE DATABASE smconcurrent; CREATE DATABASE smbroken; CREATE DATABASE smoutdated; CREATE DATABASE smnewer; CREATE DATABASE smtoolfresh;");
 
         var builder = new SqlConnectionStringBuilder(master);
