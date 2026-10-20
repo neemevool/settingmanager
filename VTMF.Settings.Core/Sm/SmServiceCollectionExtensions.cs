@@ -10,6 +10,7 @@ public static class SmServiceCollectionExtensions
         services.AddSingleton<SmClient>();
         services.AddSingleton(_ => SmScriptSet.LoadDefault());
         services.AddSingleton<SmInstaller>();
+        services.AddSingleton<SmOrchestrator>();
         return services;
     }
 }

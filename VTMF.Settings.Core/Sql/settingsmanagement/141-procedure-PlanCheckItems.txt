@@ -1,0 +1,167 @@
+/*
+  sm.PlanCheckItems: read-only precondition check of a plan's items against the current rows. Changes nothing.
+  Appends one row per failed precondition to the caller's #conflicts:
+    seq int, action nvarchar(12), physicaltable sysname, workercode nvarchar(100), name nvarchar(200),
+    expectedvalue nvarchar(400), currentvalue nvarchar(400), reason nvarchar(20)
+
+  Preconditions (reason when not met):
+    Insert       no row with the item's identity                           exists
+    Update       exactly one row with the identity (missing | duplicate),
+    Delete       and it still has the old image                            changed
+                 (oldvalue, oldsettingtype, oldlistvalue, oldordernr; NULL-safe, binary compare). ServerSetting items
+                 (renumbering Updates) carry no values: identity + oldsettingtype + oldordernr only.
+    CreateTable  table absent                                              table_exists
+    BackupTable  table present                                             table_missing
+    DropTable    table present (table_missing) and empty                   table_not_empty
+    row items    table present                                             table_missing
+
+  @seq set: only that item, against the state at that point (sm.ApplyPlan calls it before applying each item).
+  @seq NULL: every item against the current state, taking the plan's own earlier table items into account
+  (an Insert after CreateTable of the same table is fine; DropTable counts the rows left after the plan's earlier
+  Inserts and Deletes on that table).
+
+  Values: expectedvalue = the item's old value; currentvalue = VALUE of the item's own row (only when exactly one row
+  has its identity). Both are NULL for ServerSetting items and ServerSetting rows: their values never leave the database.
+*/
+CREATE OR ALTER PROCEDURE sm.PlanCheckItems
+    @planid int,
+    @seq    int = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @s int, @action nvarchar(12), @physicaltable sysname, @workercode nvarchar(100), @name nvarchar(200),
+            @value nvarchar(400), @settingtype nvarchar(20), @oldvalue nvarchar(400), @oldsettingtype nvarchar(20),
+            @oldlistvalue nvarchar(1600), @oldordernr int,
+            @exists bit, @created bit, @lasttableaction nvarchar(12), @key nvarchar(1000), @sql nvarchar(max),
+            @idcount int, @imagecount int, @current nvarchar(400), @rows int,
+            @reason nvarchar(20), @expected nvarchar(400);
+
+    SET @s = (SELECT MIN(seq) FROM sm.planitem WHERE planid = @planid AND (@seq IS NULL OR seq = @seq));
+
+    WHILE @s IS NOT NULL
+    BEGIN
+        SELECT @action = action, @physicaltable = physicaltable, @workercode = workercode, @name = name,
+               @value = value, @settingtype = settingtype, @oldvalue = oldvalue, @oldsettingtype = oldsettingtype,
+               @oldlistvalue = oldlistvalue, @oldordernr = oldordernr
+        FROM sm.planitem
+        WHERE planid = @planid AND seq = @s;
+
+        IF sm.IsSafeName(@physicaltable) = 0
+            THROW 51001, N'Invalid table name.', 1;
+
+        SELECT @reason = NULL, @expected = NULL, @current = NULL, @created = 0, @rows = NULL,
+               @exists = CASE WHEN OBJECT_ID(N'dbo.' + QUOTENAME(@physicaltable), N'U') IS NOT NULL THEN 1 ELSE 0 END;
+
+        IF @seq IS NULL
+        BEGIN
+            SET @lasttableaction = (SELECT TOP (1) action FROM sm.planitem
+                                    WHERE planid = @planid AND seq < @s AND physicaltable = @physicaltable
+                                      AND action IN (N'CreateTable', N'DropTable')
+                                    ORDER BY seq DESC);
+            IF @lasttableaction = N'CreateTable'
+                SELECT @exists = 1, @created = 1;
+            ELSE IF @lasttableaction = N'DropTable'
+                SET @exists = 0;
+        END
+
+        IF @action IN (N'Insert', N'Update', N'Delete')
+        BEGIN
+            IF @exists = 0
+                SET @reason = N'table_missing';
+            ELSE
+            BEGIN
+                IF @created = 1
+                    SELECT @idcount = 0, @imagecount = 0;
+                ELSE
+                BEGIN
+                    SET @key = CASE WHEN @action = N'Insert'
+                                    THEN sm.PlanIdKey(@physicaltable, @workercode, @name, @value, @settingtype)
+                                    ELSE sm.PlanIdKey(@physicaltable, @workercode, @name, @oldvalue, @oldsettingtype) END;
+                    SET @sql = N'
+                        SELECT @idcount = COUNT(*), @imagecount = ISNULL(SUM(r.image), 0), @current = MAX(r.value)
+                        FROM (SELECT CASE WHEN s.settingtype = N''ServerSetting'' THEN NULL ELSE s.VALUE END AS value,
+                                     CASE WHEN s.settingtype COLLATE Latin1_General_BIN2 = @oldsettingtype COLLATE Latin1_General_BIN2
+                                               AND s.ordernr = @oldordernr
+                                               AND (@oldsettingtype = N''ServerSetting''
+                                                    OR NOT EXISTS (SELECT s.VALUE COLLATE Latin1_General_BIN2, s.LISTVALUE COLLATE Latin1_General_BIN2
+                                                                   EXCEPT
+                                                                   SELECT @oldvalue COLLATE Latin1_General_BIN2, @oldlistvalue COLLATE Latin1_General_BIN2))
+                                          THEN 1 ELSE 0 END AS image
+                              FROM dbo.' + QUOTENAME(@physicaltable) + N' AS s
+                              WHERE s.workercode = @workercode AND s.NAME = @name
+                                AND sm.PlanIdKey(@physicaltable, s.workercode, s.NAME, s.VALUE, s.settingtype) = @key) AS r;';
+
+                    EXEC sys.sp_executesql @sql,
+                        N'@physicaltable sysname, @workercode nvarchar(100), @name nvarchar(200), @key nvarchar(1000),
+                          @oldvalue nvarchar(400), @oldsettingtype nvarchar(20), @oldlistvalue nvarchar(1600), @oldordernr int,
+                          @idcount int OUTPUT, @imagecount int OUTPUT, @current nvarchar(400) OUTPUT',
+                        @physicaltable, @workercode, @name, @key, @oldvalue, @oldsettingtype, @oldlistvalue, @oldordernr,
+                        @idcount OUTPUT, @imagecount OUTPUT, @current OUTPUT;
+                END
+
+                IF @idcount <> 1 OR N'ServerSetting' IN (@settingtype, @oldsettingtype)
+                    SET @current = NULL;
+
+                IF @action = N'Insert'
+                BEGIN
+                    IF @idcount > 0
+                        SET @reason = N'exists';
+                END
+                ELSE
+                BEGIN
+                    SET @expected = CASE WHEN @oldsettingtype = N'ServerSetting' THEN NULL ELSE @oldvalue END;
+                    SET @reason = CASE WHEN @idcount = 0 THEN N'missing'
+                                       WHEN @idcount > 1 THEN N'duplicate'
+                                       WHEN @imagecount = 0 THEN N'changed' END;
+                END
+            END
+        END
+        ELSE IF @action = N'CreateTable'
+        BEGIN
+            IF @exists = 1
+                SET @reason = N'table_exists';
+        END
+        ELSE IF @action = N'BackupTable'
+        BEGIN
+            IF @exists = 0
+                SET @reason = N'table_missing';
+        END
+        ELSE IF @action = N'DropTable'
+        BEGIN
+            IF @exists = 0
+                SET @reason = N'table_missing';
+            ELSE
+            BEGIN
+                IF @created = 1
+                    SET @rows = 0;
+                ELSE
+                BEGIN
+                    SET @sql = N'SELECT @rows = COUNT(*) FROM dbo.' + QUOTENAME(@physicaltable) + N';';
+                    EXEC sys.sp_executesql @sql, N'@rows int OUTPUT', @rows OUTPUT;
+                END
+
+                IF @seq IS NULL
+                    SET @rows = @rows
+                        + (SELECT COUNT(*) FROM sm.planitem AS i
+                           WHERE i.planid = @planid AND i.seq < @s AND i.physicaltable = @physicaltable AND i.action = N'Insert'
+                             AND NOT EXISTS (SELECT 1 FROM #conflicts AS c WHERE c.seq = i.seq))
+                        - (SELECT COUNT(*) FROM sm.planitem AS i
+                           WHERE i.planid = @planid AND i.seq < @s AND i.physicaltable = @physicaltable AND i.action = N'Delete'
+                             AND NOT EXISTS (SELECT 1 FROM #conflicts AS c WHERE c.seq = i.seq));
+
+                IF @rows > 0
+                    SET @reason = N'table_not_empty';
+            END
+        END
+        ELSE
+            THROW 51006, N'Unknown plan item action.', 1;
+
+        IF @reason IS NOT NULL
+            INSERT INTO #conflicts (seq, action, physicaltable, workercode, name, expectedvalue, currentvalue, reason)
+            VALUES (@s, @action, @physicaltable, @workercode, @name, @expected, @current, @reason);
+
+        SET @s = CASE WHEN @seq IS NULL THEN (SELECT MIN(seq) FROM sm.planitem WHERE planid = @planid AND seq > @s) END;
+    END
+END
+GO

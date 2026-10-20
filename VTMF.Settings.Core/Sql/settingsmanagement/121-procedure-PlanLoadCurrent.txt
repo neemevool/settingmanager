@@ -1,0 +1,55 @@
+-- Plan step 2 (temp tables: see 129-procedure-CreatePlan.txt). Loads the current rows of every existing
+-- (physicaltable, workercode) in #scope into #current. ServerSetting values and list values are loaded as NULL:
+-- they never leave the database, so they cannot reach plan items or messages.
+CREATE OR ALTER PROCEDURE sm.PlanLoadCurrent
+    @process nvarchar(100)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @physicaltable sysname, @workercode nvarchar(100), @table nvarchar(100), @layer nvarchar(110), @sql nvarchar(max);
+
+    DECLARE scopes CURSOR LOCAL FAST_FORWARD FOR
+        SELECT physicaltable, workercode, MIN([table]), MIN(layer)
+        FROM #scope
+        WHERE tableexists = 1 AND [table] <> N'ServerProcessSettings'
+        GROUP BY physicaltable, workercode;
+
+    OPEN scopes;
+    FETCH NEXT FROM scopes INTO @physicaltable, @workercode, @table, @layer;
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        IF sm.IsSafeName(@physicaltable) = 0
+            THROW 51001, N'Invalid table name.', 1;
+
+        SET @sql = N'
+            INSERT INTO #current (physicaltable, workercode, [table], layer, name, value, settingtype, listvalue, ordernr)
+            SELECT @physicaltable, @workercode, @table, @layer, s.NAME,
+                   CASE WHEN s.settingtype = N''ServerSetting'' THEN NULL ELSE s.VALUE END,
+                   s.settingtype,
+                   CASE WHEN s.settingtype = N''ServerSetting'' THEN NULL ELSE s.LISTVALUE END,
+                   s.ordernr
+            FROM dbo.' + QUOTENAME(@physicaltable) + N' AS s
+            WHERE s.workercode = @workercode;';
+
+        EXEC sys.sp_executesql @sql,
+            N'@physicaltable sysname, @workercode nvarchar(100), @table nvarchar(100), @layer nvarchar(110)',
+            @physicaltable, @workercode, @table, @layer;
+
+        FETCH NEXT FROM scopes INTO @physicaltable, @workercode, @table, @layer;
+    END
+    CLOSE scopes;
+    DEALLOCATE scopes;
+
+    IF EXISTS (SELECT 1 FROM #scope WHERE tableexists = 1 AND [table] = N'ServerProcessSettings')
+        INSERT INTO #current (physicaltable, workercode, [table], layer, name, value, settingtype, listvalue, ordernr)
+        SELECT N'ServerProcessSettings', s.workercode, N'ServerProcessSettings', N'base', s.NAME,
+               CASE WHEN s.settingtype = N'ServerSetting' THEN NULL ELSE s.VALUE END,
+               s.settingtype,
+               CASE WHEN s.settingtype = N'ServerSetting' THEN NULL ELSE s.LISTVALUE END,
+               s.ordernr
+        FROM dbo.ServerProcessSettings AS s
+        WHERE LEFT(s.NAME, LEN(@process) + 1) = @process + N'.'
+          AND s.workercode = N'ALL';
+END
+GO

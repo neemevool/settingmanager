@@ -1,0 +1,47 @@
+-- Stores a plan from the caller's #items and #warnings (temp tables: see 129-procedure-CreatePlan.txt) with
+-- status Created, computes its checksum and touches the session. Used by every procedure that creates plans
+-- (CreatePlan, rollback, migration). #items.seq must be set and unique.
+CREATE OR ALTER PROCEDURE sm.PlanStore
+    @process     nvarchar(100),
+    @mode        nvarchar(10),
+    @description nvarchar(400),
+    @source      nvarchar(200),
+    @desired     nvarchar(max) = NULL,
+    @sessionid   int = NULL,
+    @rollbackof  int = NULL,
+    @planid      int OUTPUT,
+    @checksum    char(64) OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+
+    DECLARE @now datetime2(3) = SYSUTCDATETIME();
+
+    BEGIN TRANSACTION;
+
+    INSERT INTO sm.[plan] (sessionid, rollbackof, created, createdby, process, description, source, mode, desired, checksum, status)
+    VALUES (@sessionid, @rollbackof, @now, ORIGINAL_LOGIN(), @process, @description, @source, @mode, @desired,
+            REPLICATE('0', 64), N'Created');
+    SET @planid = CONVERT(int, SCOPE_IDENTITY());
+
+    INSERT INTO sm.planitem (planid, seq, action, physicaltable, [table], layer, workercode, name, value, settingtype,
+                             listvalue, ordernr, oldvalue, oldsettingtype, oldlistvalue, oldordernr, backuptable)
+    SELECT @planid, seq, action, physicaltable, [table], layer, workercode, name, value, settingtype,
+           listvalue, ordernr, oldvalue, oldsettingtype, oldlistvalue, oldordernr, backuptable
+    FROM #items;
+
+    INSERT INTO sm.planwarning (planid, severity, code, message)
+    SELECT @planid, severity, code, message
+    FROM #warnings
+    ORDER BY seq;
+
+    SET @checksum = sm.PlanChecksum(@planid);
+    UPDATE sm.[plan] SET checksum = @checksum WHERE id = @planid;
+
+    IF @sessionid IS NOT NULL
+        UPDATE sm.session SET lastactivity = @now WHERE id = @sessionid;
+
+    COMMIT TRANSACTION;
+END
+GO

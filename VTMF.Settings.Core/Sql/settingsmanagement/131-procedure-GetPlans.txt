@@ -1,0 +1,18 @@
+-- Lists plans newest first, optionally for one process and/or session (all columns except desired).
+CREATE OR ALTER PROCEDURE sm.GetPlans
+    @process   nvarchar(100) = NULL,
+    @sessionid int = NULL,
+    @top       int = 20
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    SELECT TOP (CASE WHEN @top IS NULL OR @top < 1 THEN 20 ELSE @top END)
+           id, sessionid, rollbackof, created, createdby, process, description, source, mode, checksum, status,
+           appliedat, appliedby, message
+    FROM sm.[plan]
+    WHERE (@process IS NULL OR process = @process)
+      AND (@sessionid IS NULL OR sessionid = @sessionid)
+    ORDER BY id DESC;
+END
+GO

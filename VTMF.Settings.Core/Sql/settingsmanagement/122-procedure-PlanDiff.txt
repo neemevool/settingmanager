@@ -1,0 +1,74 @@
+-- Plan step 3 (temp tables: see 129-procedure-CreatePlan.txt). Diffs #desired against #current into #items and
+-- #warnings, matching rows on idkey, places new rows (sm.PlanOrder), then numbers the items.
+--   upsert: Insert if the identity is absent; Update if VALUE, settingtype, LISTVALUE (case-sensitive) or a given
+--           ordernr differs; nothing if equal. New rows without ordernr get ordernr 0 in ServerProcessSettings,
+--           elsewhere they are placed by sm.PlanOrder (anchor / name prefix / end, renumbering if needed).
+--   remove (merge): Delete if present, else warning ROW_NOT_FOUND.
+--   replace: additionally Delete every current row of a replace scope whose identity is not desired
+--            (ServerSetting rows are never deleted).
+--   seq: CreateTable items first, then per physical table Delete, Update, Insert by resulting ordernr.
+CREATE OR ALTER PROCEDURE sm.PlanDiff
+    @mode nvarchar(10)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    INSERT INTO #items (action, physicaltable, [table], layer, workercode, name, value, settingtype, listvalue, ordernr,
+                        oldvalue, oldsettingtype, oldlistvalue, oldordernr)
+    SELECT CASE WHEN c.idkey IS NULL THEN N'Insert' ELSE N'Update' END,
+           d.physicaltable, d.[table], d.layer, d.workercode, d.name, d.value, d.settingtype, d.listvalue,
+           CASE
+               WHEN d.ordernr IS NOT NULL THEN d.ordernr
+               WHEN c.idkey IS NOT NULL THEN c.ordernr
+               WHEN d.physicaltable = N'ServerProcessSettings' THEN 0
+           END,
+           c.value, c.settingtype, c.listvalue, c.ordernr
+    FROM #desired AS d
+    LEFT JOIN #current AS c ON c.idkey = d.idkey
+    WHERE d.op = N'upsert'
+      AND (c.idkey IS NULL
+           OR (d.ordernr IS NOT NULL AND d.ordernr <> c.ordernr)
+           OR EXISTS (SELECT d.value COLLATE Latin1_General_BIN2, d.settingtype COLLATE Latin1_General_BIN2,
+                             d.listvalue COLLATE Latin1_General_BIN2
+                      EXCEPT
+                      SELECT c.value COLLATE Latin1_General_BIN2, c.settingtype COLLATE Latin1_General_BIN2,
+                             c.listvalue COLLATE Latin1_General_BIN2));
+
+    INSERT INTO #items (action, physicaltable, [table], layer, workercode, name, oldvalue, oldsettingtype, oldlistvalue, oldordernr)
+    SELECT N'Delete', c.physicaltable, d.[table], d.layer, c.workercode, c.name, c.value, c.settingtype, c.listvalue, c.ordernr
+    FROM #desired AS d
+    JOIN #current AS c ON c.idkey = d.idkey
+    WHERE d.op = N'remove';
+
+    INSERT INTO #warnings (severity, code, message)
+    SELECT N'Warning', N'ROW_NOT_FOUND',
+           LEFT(CONCAT(N'Row to remove not found: ', d.[table], N' (', d.layer, N') ', d.apiname,
+                       CASE WHEN d.settingtype = N'SettingGroup' THEN N'=' + d.value END, N'.'), 1000)
+    FROM #desired AS d
+    WHERE d.op = N'remove'
+      AND NOT EXISTS (SELECT 1 FROM #current AS c WHERE c.idkey = d.idkey)
+    ORDER BY d.rowno;
+
+    IF @mode = N'replace'
+        INSERT INTO #items (action, physicaltable, [table], layer, workercode, name, oldvalue, oldsettingtype, oldlistvalue, oldordernr)
+        SELECT N'Delete', c.physicaltable, s.[table], s.layer, c.workercode, c.name, c.value, c.settingtype, c.listvalue, c.ordernr
+        FROM #scope AS s
+        JOIN #current AS c ON c.physicaltable = s.physicaltable AND c.workercode = s.workercode
+        WHERE s.replacescope = 1
+          AND c.settingtype <> N'ServerSetting'
+          AND NOT EXISTS (SELECT 1 FROM #desired AS d WHERE d.op = N'upsert' AND d.idkey = c.idkey);
+
+    EXEC sm.PlanOrder;
+
+    WITH numbered AS
+    (
+        SELECT seq,
+               ROW_NUMBER() OVER (ORDER BY CASE WHEN action = N'CreateTable' THEN 0 ELSE 1 END,
+                                           physicaltable,
+                                           CASE action WHEN N'Delete' THEN 1 WHEN N'Update' THEN 2 WHEN N'Insert' THEN 3 ELSE 4 END,
+                                           COALESCE(ordernr, oldordernr), workercode, name, COALESCE(value, oldvalue)) AS rn
+        FROM #items
+    )
+    UPDATE numbered SET seq = rn;
+END
+GO

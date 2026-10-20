@@ -1,0 +1,16 @@
+-- Lists sessions newest first, optionally for one process. plancount/appliedcount as in sm.StartSession.
+CREATE OR ALTER PROCEDURE sm.GetSessions
+    @process nvarchar(100) = NULL,
+    @top     int = 20
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    SELECT TOP (CASE WHEN @top IS NULL OR @top < 1 THEN 20 ELSE @top END)
+           s.id, s.name, s.process, s.createdby, s.created, s.lastactivity, s.status,
+           (SELECT COUNT(*) FROM sm.[plan] AS p WHERE p.sessionid = s.id) AS plancount,
+           (SELECT COUNT(*) FROM sm.[plan] AS p WHERE p.sessionid = s.id AND p.appliedat IS NOT NULL) AS appliedcount
+    FROM sm.session AS s
+    WHERE @process IS NULL OR s.process = @process
+    ORDER BY s.id DESC;
+END

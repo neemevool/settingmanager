@@ -1,0 +1,268 @@
+-- Plan step inside sm.PlanDiff, before the items are numbered (temp tables: see 129-procedure-CreatePlan.txt).
+-- Places the merge Insert items without ordernr (ordernr NULL from sm.PlanDiff), per (physicaltable, workercode),
+-- new rows in desired order (#desired.rowno). ServerProcessSettings is not ordered (sm.PlanDiff gives new rows 0).
+-- The rows considered are the rows that exist after the plan: current rows without a Delete item (at the ordernr of
+-- their Update item, if any), Inserts with an ordernr, and new rows placed earlier.
+--   Sort key: ordernr, NAME, VALUE. Path: NAME, or NAME.VALUE for SettingGroup rows that are not name-keyed (idkey).
+--   Anchor: after = NAME or NAME=VALUE (last matching row by sort key); not found -> warning ANCHOR_NOT_FOUND and
+--           fall through. Otherwise the last row (by sort key) whose path shares the most leading dot-segments
+--           (>= 1) with the new row's path. None -> append at max(ordernr) + 10 (10 for an empty table).
+--   Placement: after the anchor and after new rows already placed directly behind it. A = that row's ordernr,
+--           N = next row's ordernr: no next -> A + 10; N - A >= 2 -> A + (N - A) / 2; else the whole
+--           (physicaltable, workercode) is renumbered: final order ordernr 10, 20, 30...; Insert and Update items
+--           take the final ordernr, current rows without an item whose ordernr changes get an Update item (same
+--           values; ServerSetting rows carry NULL values as loaded in #current, sm.ApplyPlan sets only ordernr);
+--           one warning RENUMBER per table. Explicit ordernr values in a renumbered table are renumbered too (the
+--           relative order is kept). Duplicate identities among the current rows of a renumbered table are refused
+--           (DUPLICATE_ROW, 51011), as renumbering touches every row.
+CREATE OR ALTER PROCEDURE sm.PlanOrder
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF NOT EXISTS (SELECT 1 FROM #items WHERE action = N'Insert' AND ordernr IS NULL)
+        RETURN;
+
+    CREATE TABLE #ord
+    (
+        id            int IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        kind          char(1)        COLLATE DATABASE_DEFAULT NOT NULL,   -- C current row, I Insert with ordernr, N Insert to place
+        physicaltable sysname        COLLATE DATABASE_DEFAULT NOT NULL,
+        workercode    nvarchar(100)  COLLATE DATABASE_DEFAULT NOT NULL,
+        [table]       nvarchar(100)  COLLATE DATABASE_DEFAULT NOT NULL,
+        layer         nvarchar(110)  COLLATE DATABASE_DEFAULT NOT NULL,
+        name          nvarchar(200)  COLLATE DATABASE_DEFAULT NOT NULL,
+        value         nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+        settingtype   nvarchar(20)   COLLATE DATABASE_DEFAULT NOT NULL,
+        listvalue     nvarchar(1600) COLLATE DATABASE_DEFAULT NULL,
+        curordernr    int            NULL,       -- C: ordernr in the table
+        ordernr       int            NULL,       -- ordernr after the plan; NULL: N not placed yet
+        rowno         int            NULL,
+        after         nvarchar(1000) COLLATE DATABASE_DEFAULT NULL,
+        apiname       nvarchar(200)  COLLATE DATABASE_DEFAULT NULL,
+        path AS CONCAT(name, CASE WHEN settingtype = N'SettingGroup' AND LEFT(name, 7) <> N'Detail.' THEN N'.' + value END),
+        idkey AS CONCAT(physicaltable, NCHAR(1), workercode, NCHAR(1), name, NCHAR(1),
+                        CASE WHEN settingtype = N'SettingGroup' AND LEFT(name, 7) <> N'Detail.' THEN N'V' + value ELSE N'-' END)
+    );
+
+    -- Item identity: same expression as idkey; Delete items carry the row in old*.
+    SELECT i.physicaltable, i.workercode, i.action, i.ordernr,
+           CONCAT(i.physicaltable, NCHAR(1), i.workercode, NCHAR(1), i.name, NCHAR(1),
+                  CASE WHEN COALESCE(i.settingtype, i.oldsettingtype) = N'SettingGroup' AND LEFT(i.name, 7) <> N'Detail.'
+                       THEN N'V' + COALESCE(i.value, i.oldvalue) ELSE N'-' END) AS idkey
+    INTO #itemkeys
+    FROM #items AS i
+    WHERE i.action IN (N'Insert', N'Update', N'Delete');
+
+    SELECT DISTINCT physicaltable, workercode
+    INTO #ordtables
+    FROM #items
+    WHERE action = N'Insert' AND ordernr IS NULL;
+
+    INSERT INTO #ord (kind, physicaltable, workercode, [table], layer, name, value, settingtype, listvalue, curordernr, ordernr)
+    SELECT N'C', c.physicaltable, c.workercode, c.[table], c.layer, c.name, c.value, c.settingtype, c.listvalue, c.ordernr,
+           ISNULL(u.ordernr, c.ordernr)
+    FROM #current AS c
+    JOIN #ordtables AS t ON t.physicaltable = c.physicaltable AND t.workercode = c.workercode
+    OUTER APPLY (SELECT TOP (1) k.ordernr FROM #itemkeys AS k WHERE k.action = N'Update' AND k.idkey = c.idkey) AS u
+    WHERE NOT EXISTS (SELECT 1 FROM #itemkeys AS k WHERE k.action = N'Delete' AND k.idkey = c.idkey);
+
+    INSERT INTO #ord (kind, physicaltable, workercode, [table], layer, name, value, settingtype, listvalue, ordernr,
+                      rowno, after, apiname)
+    SELECT CASE WHEN i.ordernr IS NULL THEN N'N' ELSE N'I' END, i.physicaltable, i.workercode, i.[table], i.layer,
+           i.name, i.value, i.settingtype, i.listvalue, i.ordernr, d.rowno, d.after, d.apiname
+    FROM #items AS i
+    JOIN #ordtables AS t ON t.physicaltable = i.physicaltable AND t.workercode = i.workercode
+    LEFT JOIN #desired AS d
+        ON d.idkey = CONCAT(i.physicaltable, NCHAR(1), i.workercode, NCHAR(1), i.name, NCHAR(1),
+                            CASE WHEN i.settingtype = N'SettingGroup' AND LEFT(i.name, 7) <> N'Detail.'
+                                 THEN N'V' + i.value ELSE N'-' END)
+    WHERE i.action = N'Insert';
+
+    CREATE TABLE #rank (rn int NOT NULL PRIMARY KEY, id int NOT NULL, kind char(1) COLLATE DATABASE_DEFAULT NOT NULL, ordernr int NOT NULL);
+    DECLARE @renumbered TABLE (physicaltable sysname NOT NULL, workercode nvarchar(100) NOT NULL);
+
+    DECLARE @id int, @pt sysname, @wc nvarchar(100), @path nvarchar(1000), @after nvarchar(1000), @tbl nvarchar(100),
+            @layer nvarchar(110), @apiname nvarchar(200), @anchor int, @prefix nvarchar(1000), @eq int, @r int,
+            @a int, @n int, @ordernr int;
+
+    DECLARE newrows CURSOR LOCAL FAST_FORWARD FOR
+        SELECT id FROM #ord WHERE kind = N'N' ORDER BY rowno, id;
+    OPEN newrows;
+    FETCH NEXT FROM newrows INTO @id;
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        SELECT @pt = physicaltable, @wc = workercode, @path = path, @after = after, @tbl = [table], @layer = layer,
+               @apiname = apiname
+        FROM #ord
+        WHERE id = @id;
+        SET @anchor = NULL;
+
+        IF @after IS NOT NULL
+        BEGIN
+            SELECT TOP (1) @anchor = o.id
+            FROM #ord AS o
+            WHERE o.physicaltable = @pt AND o.workercode = @wc AND o.ordernr IS NOT NULL AND o.name = @after
+            ORDER BY o.ordernr DESC, o.name DESC, o.value DESC, o.id DESC;
+
+            SET @eq = CHARINDEX(N'=', @after);
+            IF @anchor IS NULL AND @eq > 0
+                SELECT TOP (1) @anchor = o.id
+                FROM #ord AS o
+                WHERE o.physicaltable = @pt AND o.workercode = @wc AND o.ordernr IS NOT NULL
+                  AND o.name = LEFT(@after, @eq - 1) AND o.value = SUBSTRING(@after, @eq + 1, 1000)
+                ORDER BY o.ordernr DESC, o.name DESC, o.value DESC, o.id DESC;
+
+            IF @anchor IS NULL
+                INSERT INTO #warnings (severity, code, message)
+                VALUES (N'Warning', N'ANCHOR_NOT_FOUND',
+                        LEFT(CONCAT(N'Anchor not found: ', @after, N' in ', @tbl, N' (', @layer, N') for ', @apiname,
+                                    N'; placed after the row with the longest common name prefix, else at the end.'), 1000));
+        END
+
+        -- Longest common prefix: try the full path, then drop trailing segments while at least one remains.
+        SET @prefix = @path;
+        WHILE @anchor IS NULL AND LEN(@prefix) > 0
+        BEGIN
+            SELECT TOP (1) @anchor = o.id
+            FROM #ord AS o
+            WHERE o.physicaltable = @pt AND o.workercode = @wc AND o.ordernr IS NOT NULL
+              AND LEFT(o.path + N'.', DATALENGTH(@prefix + N'.') / 2) = @prefix + N'.'
+            ORDER BY o.ordernr DESC, o.name DESC, o.value DESC, o.id DESC;
+
+            SET @prefix = CASE WHEN CHARINDEX(N'.', @prefix) = 0 THEN N''
+                               ELSE LEFT(@prefix, DATALENGTH(@prefix) / 2 - CHARINDEX(N'.', REVERSE(@prefix))) END;
+        END
+
+        IF @anchor IS NULL
+            SET @ordernr = ISNULL((SELECT MAX(ordernr) FROM #ord WHERE physicaltable = @pt AND workercode = @wc), 0) + 10;
+        ELSE
+        BEGIN
+            TRUNCATE TABLE #rank;
+            INSERT INTO #rank (rn, id, kind, ordernr)
+            SELECT ROW_NUMBER() OVER (ORDER BY ordernr, name, value, id), id, kind, ordernr
+            FROM #ord
+            WHERE physicaltable = @pt AND workercode = @wc AND ordernr IS NOT NULL;
+
+            SET @r = (SELECT rn FROM #rank WHERE id = @anchor);
+            WHILE EXISTS (SELECT 1 FROM #rank WHERE rn = @r + 1 AND kind = N'N')
+                SET @r += 1;
+
+            SET @a = (SELECT ordernr FROM #rank WHERE rn = @r);
+            SET @n = (SELECT ordernr FROM #rank WHERE rn = @r + 1);
+
+            IF @n IS NULL
+                SET @ordernr = @a + 10;
+            ELSE IF @n - @a >= 2
+                SET @ordernr = @a + (@n - @a) / 2;
+            ELSE
+            BEGIN
+                -- No gap: spread the table in steps of 20 and put the new row in the gap behind the anchor; the
+                -- final renumbering below compresses the table to steps of 10.
+                UPDATE o SET ordernr = 20 * k.rn
+                FROM #ord AS o
+                JOIN #rank AS k ON k.id = o.id;
+                SET @ordernr = 20 * @r + 10;
+
+                IF NOT EXISTS (SELECT 1 FROM @renumbered WHERE physicaltable = @pt AND workercode = @wc)
+                    INSERT INTO @renumbered (physicaltable, workercode) VALUES (@pt, @wc);
+            END
+        END
+
+        UPDATE #ord SET ordernr = @ordernr WHERE id = @id;
+
+        FETCH NEXT FROM newrows INTO @id;
+    END
+    CLOSE newrows;
+    DEALLOCATE newrows;
+
+    -- Renumbering touches every current row of the table, so duplicate identities there are refused like touched
+    -- duplicates in sm.PlanGuardrails (DUPLICATE_ROW, 51011; never a ServerSetting value in the message).
+    DECLARE @dupmessage nvarchar(2048);
+    WITH dup AS
+    (
+        SELECT c.idkey, MIN(c.physicaltable) AS physicaltable, MIN(c.workercode) AS workercode, MIN(c.name) AS name,
+               MIN(c.value) AS value, MIN(c.settingtype) AS settingtype, MAX(c.settingtype) AS maxsettingtype,
+               COUNT(*) AS n
+        FROM #current AS c
+        JOIN @renumbered AS r ON r.physicaltable = c.physicaltable AND r.workercode = c.workercode
+        GROUP BY c.idkey
+        HAVING COUNT(*) > 1
+    )
+    SELECT @dupmessage = LEFT(STRING_AGG(CONVERT(nvarchar(max),
+               CONCAT(N'Duplicate rows in ', physicaltable, N' (workercode ', workercode, N'): NAME ', name,
+                      CASE WHEN settingtype = N'SettingGroup' AND maxsettingtype = N'SettingGroup' AND LEFT(name, 7) <> N'Detail.'
+                           THEN N' VALUE ' + value END,
+                      N' occurs ', n, N' times; the new rows require renumbering this table.',
+                      N' Clean up the duplicates before planning changes to this table.')), NCHAR(10))
+               WITHIN GROUP (ORDER BY physicaltable, workercode, name, value), 2048)
+    FROM dup;
+    IF @dupmessage IS NOT NULL
+        THROW 51011, @dupmessage, 1;
+
+    WITH renum AS
+    (
+        SELECT o.ordernr,
+               10 * ROW_NUMBER() OVER (PARTITION BY o.physicaltable, o.workercode ORDER BY o.ordernr, o.name, o.value, o.id) AS newordernr
+        FROM #ord AS o
+        WHERE EXISTS (SELECT 1 FROM @renumbered AS r WHERE r.physicaltable = o.physicaltable AND r.workercode = o.workercode)
+    )
+    UPDATE renum SET ordernr = newordernr;
+
+    -- Inserts (placed, and in renumbered tables also the ones with an ordernr).
+    UPDATE i
+    SET ordernr = o.ordernr
+    FROM #items AS i
+    JOIN #ord AS o
+        ON o.kind IN (N'N', N'I')
+       AND o.idkey = CONCAT(i.physicaltable, NCHAR(1), i.workercode, NCHAR(1), i.name, NCHAR(1),
+                            CASE WHEN i.settingtype = N'SettingGroup' AND LEFT(i.name, 7) <> N'Detail.'
+                                 THEN N'V' + i.value ELSE N'-' END)
+    WHERE i.action = N'Insert';
+
+    -- Renumbered tables: Update items take the final ordernr; current rows without an item get an Update.
+    UPDATE i
+    SET ordernr = o.ordernr
+    FROM #items AS i
+    JOIN #ord AS o
+        ON o.kind = N'C'
+       AND o.idkey = CONCAT(i.physicaltable, NCHAR(1), i.workercode, NCHAR(1), i.name, NCHAR(1),
+                            CASE WHEN i.settingtype = N'SettingGroup' AND LEFT(i.name, 7) <> N'Detail.'
+                                 THEN N'V' + i.value ELSE N'-' END)
+    JOIN @renumbered AS r ON r.physicaltable = o.physicaltable AND r.workercode = o.workercode
+    WHERE i.action = N'Update';
+
+    -- An ordernr-only Update whose ordernr the renumbering restored is no longer a change.
+    DELETE i
+    FROM #items AS i
+    JOIN @renumbered AS r ON r.physicaltable = i.physicaltable AND r.workercode = i.workercode
+    WHERE i.action = N'Update'
+      AND i.ordernr = i.oldordernr
+      AND NOT EXISTS (SELECT i.value COLLATE Latin1_General_BIN2, i.settingtype COLLATE Latin1_General_BIN2,
+                             i.listvalue COLLATE Latin1_General_BIN2
+                      EXCEPT
+                      SELECT i.oldvalue COLLATE Latin1_General_BIN2, i.oldsettingtype COLLATE Latin1_General_BIN2,
+                             i.oldlistvalue COLLATE Latin1_General_BIN2);
+
+    INSERT INTO #items (action, physicaltable, [table], layer, workercode, name, value, settingtype, listvalue, ordernr,
+                        oldvalue, oldsettingtype, oldlistvalue, oldordernr)
+    SELECT N'Update', o.physicaltable, o.[table], o.layer, o.workercode, o.name, o.value, o.settingtype, o.listvalue,
+           o.ordernr, o.value, o.settingtype, o.listvalue, o.curordernr
+    FROM #ord AS o
+    JOIN @renumbered AS r ON r.physicaltable = o.physicaltable AND r.workercode = o.workercode
+    WHERE o.kind = N'C'
+      AND o.ordernr <> o.curordernr
+      AND NOT EXISTS (SELECT 1 FROM #itemkeys AS k WHERE k.action = N'Update' AND k.idkey = o.idkey);
+
+    INSERT INTO #warnings (severity, code, message)
+    SELECT N'Warning', N'RENUMBER',
+           LEFT(CONCAT(N'No free ordernr for the new rows in ', r.physicaltable, N' (workercode ', r.workercode,
+                       N'): the table is renumbered in steps of 10 (10, 20, 30...); ',
+                       (SELECT COUNT(*) FROM #ord AS o
+                        WHERE o.physicaltable = r.physicaltable AND o.workercode = r.workercode
+                          AND o.kind = N'C' AND o.ordernr <> o.curordernr),
+                       N' existing rows change ordernr.'), 1000)
+    FROM @renumbered AS r
+    ORDER BY r.physicaltable, r.workercode;
+END
+GO

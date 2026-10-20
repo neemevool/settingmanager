@@ -1,7 +1,7 @@
 {
   "name": "vtmf-settings",
-  "version": "1.0.1",
-  "description": "Connects Claude Code to the local VTMF.Settings MCP server and guides sm module install/update per client",
+  "version": "1.1.1",
+  "description": "Connects Claude Code to the local VTMF.Settings MCP server, guides sm module install/update per client, and lets you inspect, change, copy and undo VTMF settings safely (preview, confirm, apply, undo)",
   "author": {
     "name": "VTMF"
   }

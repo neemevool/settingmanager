@@ -115,15 +115,55 @@ the `sm` module (stored procedures) in a client database before Claude works wit
    /plugin install vtmf-settings@vtmf
    /reload-plugins
    ```
+   
+   When there are updates to the plugin, update with:
+   ```
+   /plugin marketplace update vtmf
+   /reload-plugins
+   ```
+   
 5. Check the connection with `/mcp`: `vtmf-settings` should be listed as connected.
 
-Update the plugin with `/plugin marketplace update vtmf`, then `/reload-plugins`.
 If the MCP server is not at `http://localhost:8081/mcp`, set `VTMF_SETTINGS_MCP_URL` before starting Claude Code.
 For a host other than localhost/127.0.0.1, also add that host to `AllowedHosts` (environment variable) of the
 MCP container.
 
-Tools: `list_clients`, `module_status`, `install_module`, `list_processes`, `list_tables`, `get_settings`,
-`get_effective_settings`, `settings_usage`, `legacy_env_rows`. `ServerSetting` values are always masked.
+Tools for reading: `list_clients`, `module_status`, `install_module`, `list_processes`, `list_tables`,
+`get_settings`, `get_effective_settings`, `settings_usage`, `legacy_env_rows`.
+`ServerSetting` values are always masked.
+
+Tools for changing settings (see [6. Changing settings with Claude](#6-changing-settings-with-claude)):
+
+| Group | Tools |
+|---|---|
+| Sessions (what you changed, and why) | `start_session`, `list_sessions`, `session_changes`, `close_session` |
+| Previews and changes | `create_plan`, `get_plan`, `list_plans`, `apply_plan` |
+| Undo | `rollback_plan`, `rollback_session` |
+| Copying between clients | `compare_clients`, `clone_plan`, `legacy_env_migration_plan` |
+
+Only `apply_plan` changes settings. Everything else reads or prepares.
+
+Skills: `sm-module` (checks and installs the `sm` module) and `manage-settings` (guides Claude when you
+want to change settings).
+
+### Updating
+
+Two parts must be updated together: the MCP image and the plugin.
+
+1. MCP image: change the tag in `compose.yaml`, then run the `pull` and `up -d` commands from step 3.
+2. Plugin: in Claude Code run `/plugin marketplace update vtmf`, then `/reload-plugins`.
+
+Check the versions:
+
+- `/plugin` shows the plugin version (currently 1.1.1).
+- `module_status` shows the `sm` module version in a client database (currently 5). Ask
+  `Is the sm module up to date for prod-client1?`
+
+If `module_status` reports:
+
+- `module_outdated`: nothing to do by hand. The `sm-module` skill installs the new module the next time you
+  work with that client (Claude Code asks permission first).
+- `module_newer_than_tool`: the database is ahead of the MCP image. Update the image (step 1).
 
 ## 5. Sample prompts
 
@@ -134,6 +174,13 @@ Tools: `list_clients`, `module_status`, `install_module`, `list_processes`, `lis
 | `Show the Email settings for prod-client1.` | The `sm-module` skill runs first: `module_status`, and `install_module` if the module is missing or outdated (Claude Code asks permission before running it). Then `get_settings`. |
 | `What are the effective settings for process X in prod-client1?` | `list_processes` to find the process, then `get_effective_settings`. |
 | `Where is the setting Email.SMTP.Server used in prod-client1?` | `settings_usage`. |
+| `Set Email.SMTP.Server to smtp.example.com in prod-client1.` | Claude shows a preview table and waits for your "yes" before changing anything. |
+| `Add a LOT column after DOCNR in the document list of tproc` | Claude finds the current settings, asks what you are setting up, shows a preview, applies after "yes". |
+| `Copy process tproc from prod-client1 to prod-client2.` | `compare_clients` and `clone_plan`; preview, then apply after "yes". |
+| `Compare tproc between prod-client1 and prod-client2.` | `compare_clients`; lists the differences. Nothing is changed. |
+| `Undo the last change.` | `rollback_plan` for the latest change. |
+| `Undo everything I did in this session.` | `rollback_session`; reverts all changes of the session, newest first. |
+| `Show what I changed in this session.` | `session_changes`. |
 
 How to check it works:
 
@@ -146,3 +193,46 @@ How to check it works:
   `docker compose --env-file settings.env logs vtmf-settings-mcp`.
 - `module_newer_than_tool`: the database has a newer `sm` module than the MCP image. Update the image tag in
   `compose.yaml` and run the `pull` and `up -d` commands again.
+
+## 6. Changing settings with Claude
+
+You do not need to ask for a "plan". Ask Claude to show the settings you are interested in, then say what to
+change. Claude prepares the change, shows it to you, and applies it only after you confirm.
+
+Sample conversation:
+
+> **You:** Show the document list columns of tproc in prod-client1.
+>
+> **Claude:** *(shows the current columns: DOCNR, DATE, CUSTOMER, ...)*
+>
+> **You:** Add a LOT column after DOCNR.
+>
+> **Claude:** What are you setting up? *(a short name, e.g. "LOT column in document list"; it labels your
+> changes so you can find or undo them later)*
+>
+> **You:** LOT column in document list.
+>
+> **Claude:** *(shows a preview table: each setting, its current value and the new value)* Apply this?
+>
+> **You:** yes
+>
+> **Claude:** Applied. Reload the SPA to see the change.
+>
+> **You:** Undo that.
+>
+> **Claude:** *(reverts the change and confirms)*
+
+How it works:
+
+- **Preview.** Nothing changes until you say yes. Read the table before you confirm.
+- **"Stale".** If someone changed the same settings after the preview was made, Claude reports the preview
+  as stale. Nothing was changed. Claude reads the settings again and shows a new preview. Undo never reverts
+  only part of a change: it either goes through completely or not at all.
+- **Undo.** `Undo that` reverts one change. `Undo everything I did in this session` reverts all changes made
+  since you named the work, newest first.
+- **New tables.** If a table was created during the work and is later rolled back, it is first backed up as
+  `bck_{table}_{yyyyMMdd_HHmmss}` and then dropped. The data is not lost.
+- **Who changed what.** Every change is recorded with your SQL login.
+- **Settings UI.** Changes made by hand in the Settings UI are not part of sessions and cannot be undone
+  with these commands.
+- After a change, reload the SPA to see it.

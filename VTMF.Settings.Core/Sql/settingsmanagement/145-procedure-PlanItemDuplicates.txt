@@ -1,0 +1,71 @@
+/*
+  sm.PlanItemDuplicates: DUPLICATE_ROW guardrail (U10) for plans built from stored items instead of a desired state
+  (rollback, session rollback). Reads the caller's #items (columns: 129-procedure-CreatePlan.txt) and throws
+  51011 when the identity (sm.PlanIdKey) of an Insert, Update or Delete item has more than one physical row in its
+  table. The identity uses the item's new image for Insert and its old image for Update/Delete. Items whose table
+  does not exist (yet) are skipped. Read-only; changes nothing.
+  Message per duplicate (same style as sm.PlanGuardrails): table, workercode, NAME, and VALUE only for value-keyed
+  SettingGroup identities, so ServerSetting values never appear.
+  Usage: fill #items, EXEC sm.PlanItemDuplicates; then sm.PlanStore.
+*/
+CREATE OR ALTER PROCEDURE sm.PlanItemDuplicates
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    CREATE TABLE #dups
+    (
+        physicaltable sysname        COLLATE DATABASE_DEFAULT NOT NULL,
+        workercode    nvarchar(100)  COLLATE DATABASE_DEFAULT NULL,
+        name          nvarchar(200)  COLLATE DATABASE_DEFAULT NULL,
+        keyvalue      nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+        n             int            NOT NULL
+    );
+
+    DECLARE @physicaltable sysname, @sql nvarchar(max), @message nvarchar(2048);
+
+    DECLARE tables CURSOR LOCAL FAST_FORWARD FOR
+        SELECT DISTINCT physicaltable
+        FROM #items
+        WHERE action IN (N'Insert', N'Update', N'Delete');
+    OPEN tables;
+    FETCH NEXT FROM tables INTO @physicaltable;
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        IF sm.IsSafeName(@physicaltable) = 1 AND OBJECT_ID(N'dbo.' + QUOTENAME(@physicaltable), N'U') IS NOT NULL
+        BEGIN
+            SET @sql = N'
+                INSERT INTO #dups (physicaltable, workercode, name, keyvalue, n)
+                SELECT i.physicaltable, i.workercode, i.name,
+                       CASE WHEN i.keysettingtype = N''SettingGroup'' AND LEFT(i.name, 7) <> N''Detail.'' THEN i.keyvalue END,
+                       COUNT(*)
+                FROM (SELECT DISTINCT physicaltable, workercode, name,
+                             CASE WHEN action = N''Insert'' THEN value ELSE oldvalue END AS keyvalue,
+                             CASE WHEN action = N''Insert'' THEN settingtype ELSE oldsettingtype END AS keysettingtype
+                      FROM #items
+                      WHERE physicaltable = @physicaltable AND action IN (N''Insert'', N''Update'', N''Delete'')) AS i
+                JOIN dbo.' + QUOTENAME(@physicaltable) + N' AS s
+                  ON s.workercode = i.workercode AND s.NAME = i.name
+                 AND sm.PlanIdKey(@physicaltable, s.workercode, s.NAME, s.VALUE, s.settingtype)
+                   = sm.PlanIdKey(@physicaltable, i.workercode, i.name, i.keyvalue, i.keysettingtype)
+                GROUP BY i.physicaltable, i.workercode, i.name, i.keyvalue, i.keysettingtype
+                HAVING COUNT(*) > 1;';
+            EXEC sys.sp_executesql @sql, N'@physicaltable sysname', @physicaltable;
+        END
+        FETCH NEXT FROM tables INTO @physicaltable;
+    END
+    CLOSE tables;
+    DEALLOCATE tables;
+
+    IF EXISTS (SELECT 1 FROM #dups)
+    BEGIN
+        SELECT @message = LEFT(STRING_AGG(CONVERT(nvarchar(max),
+                   CONCAT(N'Duplicate rows in ', physicaltable, N' (workercode ', workercode, N'): NAME ', name,
+                          N' VALUE ' + keyvalue,
+                          N' occurs ', n, N' times. Clean up the duplicates before planning changes to this row.')),
+                   NCHAR(10)) WITHIN GROUP (ORDER BY physicaltable, workercode, name, keyvalue), 2048)
+        FROM #dups;
+        THROW 51011, @message, 1;
+    END
+END
+GO

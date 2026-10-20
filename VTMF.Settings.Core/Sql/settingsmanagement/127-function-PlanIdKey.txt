@@ -1,0 +1,17 @@
+-- Row identity key (see "Row identity" in 129-procedure-CreatePlan.txt): (physicaltable, workercode, NAME), plus VALUE
+-- for SettingGroup rows that are not name-keyed (NAME starts with 'Detail.'). Scalar form of the idkey computed column
+-- of #desired/#current (temp-table computed columns cannot call module functions); the two must stay identical.
+-- Used by sm.PlanCheckItems and sm.ApplyPlan to find a plan item's physical row.
+CREATE OR ALTER FUNCTION sm.PlanIdKey(
+    @physicaltable sysname,
+    @workercode    nvarchar(100),
+    @name          nvarchar(200),
+    @value         nvarchar(400),
+    @settingtype   nvarchar(20))
+RETURNS nvarchar(1000)
+AS
+BEGIN
+    RETURN CONCAT(@physicaltable, NCHAR(1), @workercode, NCHAR(1), @name, NCHAR(1),
+                  CASE WHEN @settingtype = N'SettingGroup' AND LEFT(@name, 7) <> N'Detail.' THEN N'V' + @value ELSE N'-' END);
+END
+GO

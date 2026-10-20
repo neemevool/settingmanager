@@ -16,3 +16,5 @@ The `sm` module (stored procedures) must be installed in a client's database, at
 7. `sm_error` on every call: the SQL server or login is unreachable. Tell the user; do not try to install.
 8. `unknown_client`: call `list_clients` and use an exact client name.
 9. If any later tool returns `module_not_installed`, `module_outdated` or `module_newer_than_tool`, go back to step 2.
+
+Then continue with the manage-settings skill for the user's actual task.

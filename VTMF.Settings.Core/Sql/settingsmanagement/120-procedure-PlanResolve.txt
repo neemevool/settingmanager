@@ -1,0 +1,95 @@
+-- Plan step 1 (temp tables: see 129-procedure-CreatePlan.txt). Adds the (table, layer) of every desired row to
+-- #scope, validates layers and names, and resolves physical table, workercode and physical NAME in #scope and
+-- #desired. Physical table = {process}{table}{suffix} (or the alias table with @targetAlias, see below);
+-- ServerProcessSettings stays as is with NAME prefixed {process}. Missing tables stay tableexists = 0 for
+-- sm.PlanGuardrails (TABLE_MISSING / createTable / ALIAS_TARGET).
+CREATE OR ALTER PROCEDURE sm.PlanResolve
+    @process nvarchar(100),
+    @mode    nvarchar(10),
+    @targetAlias bit = 0
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF @mode = N'replace'
+       AND EXISTS (SELECT 1
+                   FROM #desired AS d
+                   WHERE NOT EXISTS (SELECT 1 FROM #scope AS s WHERE s.[table] = d.[table] AND s.layer = d.layer))
+        THROW 51006, N'Invalid desired state: in replace mode every row must belong to a (table, layer) listed in scope.', 1;
+
+    INSERT INTO #scope ([table], layer, replacescope)
+    SELECT DISTINCT d.[table], d.layer, 0
+    FROM #desired AS d
+    WHERE NOT EXISTS (SELECT 1 FROM #scope AS s WHERE s.[table] = d.[table] AND s.layer = d.layer);
+
+    IF EXISTS (SELECT 1 FROM #scope WHERE layer LIKE N'worker:%')
+        THROW 51008, N'Worker-specific rows are not managed. Use env:{environment}, lang:{code}, or a process-type override.', 1;
+
+    IF EXISTS (SELECT 1 FROM #scope AS s CROSS APPLY sm.ResolveLayer(s.layer) AS l WHERE l.kind IS NULL)
+        THROW 51002, N'Invalid layer. Use base, env:{name} or lang:{code} (lowercase letters, digits, underscore).', 1;
+
+    IF EXISTS (SELECT 1 FROM #scope WHERE [table] = N'ServerProcessSettings' AND layer <> N'base')
+        THROW 51005, N'ServerProcessSettings supports only the base layer.', 1;
+
+    -- The physical table name must fit in sysname; a truncated name could resolve to a different table.
+    IF EXISTS (SELECT 1
+               FROM #scope AS s CROSS APPLY sm.ResolveLayer(s.layer) AS l
+               WHERE s.[table] <> N'ServerProcessSettings' AND LEN(@process) + LEN(s.[table]) + LEN(l.suffix) > 128)
+        THROW 51006, N'Invalid desired state: the combined physical table name exceeds 128 characters.', 1;
+
+    IF EXISTS (SELECT 1 FROM #desired WHERE [table] = N'ServerProcessSettings' AND LEN(@process) + 1 + LEN(apiname) > 200)
+        THROW 51006, N'Invalid desired state: a ServerProcessSettings name with the process prefix exceeds 200 characters.', 1;
+
+    UPDATE s
+    SET kind          = l.kind,
+        workercode    = l.workercode,
+        physicaltable = CASE WHEN s.[table] = N'ServerProcessSettings' THEN N'ServerProcessSettings'
+                             ELSE @process + s.[table] + l.suffix END
+    FROM #scope AS s
+    CROSS APPLY sm.ResolveLayer(s.layer) AS l;
+
+    UPDATE #scope
+    SET tableexists = CASE WHEN OBJECT_ID(N'dbo.' + QUOTENAME(physicaltable), N'U') IS NULL THEN 0 ELSE 1 END;
+
+    -- Alias (SETTINGPROCEDURES <> own NAME): when the own table of a (view, layer) is missing and the alias process
+    -- has it, record the alias in aliasof; with targetAlias the plan writes to the alias table. sm.PlanGuardrails
+    -- reports ALIAS_TARGET (error, or warning naming the variants) and TABLE_MISSING.
+    DECLARE @alias nvarchar(400) =
+        (SELECT TOP (1) NULLIF(SETTINGPROCEDURES, NAME) FROM dbo.processtypes WHERE NAME = @process);
+    IF @alias IS NOT NULL AND sm.IsSafeName(@alias) = 1 AND LEN(@alias) <= 100
+    BEGIN
+        UPDATE s
+        SET aliasof = @alias
+        FROM #scope AS s
+        CROSS APPLY sm.ResolveLayer(s.layer) AS l
+        WHERE s.tableexists = 0
+          AND s.[table] <> N'ServerProcessSettings'
+          AND LEN(@alias) + LEN(s.[table]) + LEN(l.suffix) <= 128
+          AND OBJECT_ID(N'dbo.' + QUOTENAME(@alias + s.[table] + l.suffix), N'U') IS NOT NULL;
+
+        IF ISNULL(@targetAlias, 0) = 1
+            UPDATE s
+            SET physicaltable = s.aliasof + s.[table] + l.suffix,
+                tableexists   = 1
+            FROM #scope AS s
+            CROSS APPLY sm.ResolveLayer(s.layer) AS l
+            WHERE s.aliasof IS NOT NULL;
+    END
+
+    DECLARE @msg nvarchar(2048);
+
+    UPDATE d
+    SET physicaltable = s.physicaltable,
+        workercode    = s.workercode,
+        name          = CASE WHEN d.[table] = N'ServerProcessSettings' THEN @process + N'.' + d.apiname ELSE d.apiname END
+    FROM #desired AS d
+    JOIN #scope AS s ON s.[table] = d.[table] AND s.layer = d.layer;
+
+    SELECT TOP (1) @msg = CONCAT(N'Invalid desired state: the row ', [table], N' (', layer, N') ', apiname, N' is listed more than once.')
+    FROM #desired
+    WHERE idkey IN (SELECT idkey FROM #desired GROUP BY idkey HAVING COUNT(*) > 1)
+    ORDER BY rowno;
+    IF @msg IS NOT NULL
+        THROW 51006, @msg, 1;
+END
+GO

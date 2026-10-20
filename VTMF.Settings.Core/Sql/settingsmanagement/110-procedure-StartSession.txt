@@ -1,0 +1,31 @@
+-- Opens a work session for a process. plancount/appliedcount count the session's sm.[plan] rows;
+-- "applied" means appliedat IS NOT NULL (so plans later marked RolledBack still count as having been applied).
+CREATE OR ALTER PROCEDURE sm.StartSession
+    @name    nvarchar(200),
+    @process nvarchar(100)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF @name IS NULL OR LEN(LTRIM(RTRIM(@name))) = 0
+        THROW 51006, N'Session name must not be blank.', 1;
+
+    IF sm.IsSafeName(@process) = 0
+        THROW 51001, N'Invalid process name.', 1;
+
+    IF NOT EXISTS (SELECT 1 FROM dbo.processtypes WHERE NAME = @process)
+        THROW 51003, N'Process not found.', 1;
+
+    DECLARE @now datetime2(3) = SYSUTCDATETIME();
+    DECLARE @id int;
+
+    INSERT INTO sm.session (name, process, createdby, created, lastactivity, status)
+    VALUES (LTRIM(RTRIM(@name)), @process, ORIGINAL_LOGIN(), @now, @now, N'Open');
+    SET @id = CONVERT(int, SCOPE_IDENTITY());
+
+    SELECT s.id, s.name, s.process, s.createdby, s.created, s.lastactivity, s.status,
+           (SELECT COUNT(*) FROM sm.[plan] AS p WHERE p.sessionid = s.id) AS plancount,
+           (SELECT COUNT(*) FROM sm.[plan] AS p WHERE p.sessionid = s.id AND p.appliedat IS NOT NULL) AS appliedcount
+    FROM sm.session AS s
+    WHERE s.id = @id;
+END

@@ -1,0 +1,117 @@
+/*
+  sm.SessionNetChanges: fills the caller's #source (columns: 150-procedure-PlanInvert.txt; must be empty) with the net
+  change of a session. Read-only; the caller validates @sessionid. Used by sm.GetSessionChanges and
+  sm.CreateSessionRollbackPlan (which feeds #source to sm.PlanInvert).
+
+  Input: the items of the session's plans that were applied (status Applied or RolledBack; rollback plans included),
+  in apply order: appliedat, plan id, seq. BackupTable items are ignored (backup tables stay).
+
+  Rows (Insert, Update, Delete): keyed by identity (sm.PlanIdKey over the new image for Insert, the old image for
+  Update/Delete). Per key: before-image = old image of the first item (absent for Insert), after-image = new image of
+  the last item (absent for Delete). Omitted when both images are equal (NULL-safe on value, settingtype, listvalue,
+  ordernr; two absent images are equal). Action: before absent -> Insert, after absent -> Delete, else Update.
+  An image is absent when its settingtype is NULL (settingtype is NOT NULL in every settings table), so ServerSetting
+  renumbering Updates (NULL values, settingtype set) stay value-less Updates.
+
+  Tables (CreateTable, DropTable), per physicaltable:
+    first event CreateTable, last CreateTable, table exists now  -> CreateTable  (created in the session)
+    first event DropTable,   last DropTable                      -> DropTable    (existed at start and dropped)
+    first CreateTable, last DropTable (created, then dropped)     -> nothing; its rows net to nothing, because
+                                                                    DropTable requires the table to be empty
+    first DropTable, last CreateTable (dropped, then recreated)   -> nothing; only the row changes remain
+  So #source never holds both a CreateTable and a DropTable for one table (required by sm.PlanInvert).
+
+  Output: seq 1..n in the order CreateTable items, row items, DropTable items; within each group in the apply order
+  of the first item of the table/row. backuptable is NULL.
+*/
+CREATE OR ALTER PROCEDURE sm.SessionNetChanges
+    @sessionid int
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    CREATE TABLE #applied
+    (
+        ord            int            NOT NULL PRIMARY KEY,
+        action         nvarchar(12)   COLLATE DATABASE_DEFAULT NOT NULL,
+        physicaltable  sysname        COLLATE DATABASE_DEFAULT NOT NULL,
+        [table]        nvarchar(100)  COLLATE DATABASE_DEFAULT NOT NULL,
+        layer          nvarchar(110)  COLLATE DATABASE_DEFAULT NOT NULL,
+        workercode     nvarchar(100)  COLLATE DATABASE_DEFAULT NULL,
+        name           nvarchar(200)  COLLATE DATABASE_DEFAULT NULL,
+        value          nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+        settingtype    nvarchar(20)   COLLATE DATABASE_DEFAULT NULL,
+        listvalue      nvarchar(1600) COLLATE DATABASE_DEFAULT NULL,
+        ordernr        int            NULL,
+        oldvalue       nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+        oldsettingtype nvarchar(20)   COLLATE DATABASE_DEFAULT NULL,
+        oldlistvalue   nvarchar(1600) COLLATE DATABASE_DEFAULT NULL,
+        oldordernr     int            NULL,
+        idkey          nvarchar(1000) COLLATE DATABASE_DEFAULT NULL
+    );
+
+    INSERT INTO #applied (ord, action, physicaltable, [table], layer, workercode, name, value, settingtype, listvalue,
+                          ordernr, oldvalue, oldsettingtype, oldlistvalue, oldordernr, idkey)
+    SELECT ROW_NUMBER() OVER (ORDER BY p.appliedat, p.id, i.seq),
+           i.action, i.physicaltable, i.[table], i.layer, i.workercode, i.name, i.value, i.settingtype, i.listvalue,
+           i.ordernr, i.oldvalue, i.oldsettingtype, i.oldlistvalue, i.oldordernr,
+           CASE WHEN i.action IN (N'Insert', N'Update', N'Delete')
+                THEN sm.PlanIdKey(i.physicaltable, i.workercode, i.name,
+                                  CASE WHEN i.action = N'Insert' THEN i.value ELSE i.oldvalue END,
+                                  CASE WHEN i.action = N'Insert' THEN i.settingtype ELSE i.oldsettingtype END)
+           END
+    FROM sm.[plan] AS p
+    JOIN sm.planitem AS i ON i.planid = p.id
+    WHERE p.sessionid = @sessionid
+      AND p.status IN (N'Applied', N'RolledBack')
+      AND i.action IN (N'CreateTable', N'Insert', N'Update', N'Delete', N'DropTable');
+
+    WITH rowkeys AS
+    (
+        SELECT idkey, MIN(ord) AS firstord, MAX(ord) AS lastord
+        FROM #applied
+        WHERE idkey IS NOT NULL
+        GROUP BY idkey
+    ),
+    tablekeys AS
+    (
+        SELECT physicaltable, MIN(ord) AS firstord, MAX(ord) AS lastord
+        FROM #applied
+        WHERE action IN (N'CreateTable', N'DropTable')
+        GROUP BY physicaltable
+    ),
+    net AS
+    (
+        SELECT 2 AS phase, k.firstord AS sortkey,
+               CASE WHEN f.oldsettingtype IS NULL THEN N'Insert'
+                    WHEN l.settingtype IS NULL THEN N'Delete'
+                    ELSE N'Update' END AS action,
+               l.physicaltable, l.[table], l.layer, l.workercode, l.name,
+               l.value, l.settingtype, l.listvalue, l.ordernr,
+               f.oldvalue, f.oldsettingtype, f.oldlistvalue, f.oldordernr
+        FROM rowkeys AS k
+        JOIN #applied AS f ON f.ord = k.firstord
+        JOIN #applied AS l ON l.ord = k.lastord
+        WHERE NOT EXISTS (SELECT f.oldvalue, f.oldsettingtype, f.oldlistvalue, f.oldordernr
+                          INTERSECT
+                          SELECT l.value, l.settingtype, l.listvalue, l.ordernr)
+
+        UNION ALL
+
+        SELECT CASE f.action WHEN N'CreateTable' THEN 1 ELSE 3 END, k.firstord,
+               f.action, l.physicaltable, l.[table], l.layer, l.workercode, l.name,
+               NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+        FROM tablekeys AS k
+        JOIN #applied AS f ON f.ord = k.firstord
+        JOIN #applied AS l ON l.ord = k.lastord
+        WHERE f.action = l.action
+          AND (f.action = N'DropTable' OR OBJECT_ID(N'dbo.' + QUOTENAME(k.physicaltable), N'U') IS NOT NULL)
+    )
+    INSERT INTO #source (seq, action, physicaltable, [table], layer, workercode, name, value, settingtype, listvalue,
+                         ordernr, oldvalue, oldsettingtype, oldlistvalue, oldordernr, backuptable)
+    SELECT ROW_NUMBER() OVER (ORDER BY phase, sortkey),
+           action, physicaltable, [table], layer, workercode, name, value, settingtype, listvalue,
+           ordernr, oldvalue, oldsettingtype, oldlistvalue, oldordernr, NULL
+    FROM net;
+END
+GO

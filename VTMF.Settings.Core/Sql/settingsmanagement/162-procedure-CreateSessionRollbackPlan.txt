@@ -1,0 +1,113 @@
+/*
+  sm.CreateSessionRollbackPlan: stores one plan that reverts the session's net change (sm.PlanInvert over
+  sm.SessionNetChanges) as a new Created plan: same sessionid and process (also for Closed sessions), rollbackof NULL,
+  mode merge, desired NULL, source 'rollback-session:{sessionid}', description 'Rollback of session {sessionid}: {name}'
+  (truncated to 400). Only DUPLICATE_ROW is checked (sm.PlanItemDuplicates, 51011, nothing stored); sm.ApplyPlan
+  verifies every before-image (a touched row changed since makes the whole plan Stale, nothing reverted, U9) and, when
+  applied, marks the session's Applied plans applied before this plan was created RolledBack.
+  An empty net change stores nothing and returns status NoChanges (planid and checksum NULL).
+
+  Returns the same result sets as sm.CreatePlan: (1) planid, checksum, status (Created | NoChanges), (2) items,
+  (3) warnings. Errors: unknown session 51012, a touched row has duplicates 51011.
+*/
+CREATE OR ALTER PROCEDURE sm.CreateSessionRollbackPlan
+    @sessionid int
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+
+    DECLARE @process nvarchar(100), @description nvarchar(400), @source nvarchar(200), @status nvarchar(12),
+            @newplanid int, @checksum char(64);
+
+    SELECT @process = process,
+           @description = LEFT(CONCAT(N'Rollback of session ', id, N': ', name), 400)
+    FROM sm.session
+    WHERE id = @sessionid;
+
+    IF @process IS NULL
+        THROW 51012, N'Session not found.', 1;
+
+    CREATE TABLE #source
+    (
+        seq            int            NOT NULL,
+        action         nvarchar(12)   COLLATE DATABASE_DEFAULT NOT NULL,
+        physicaltable  sysname        COLLATE DATABASE_DEFAULT NOT NULL,
+        [table]        nvarchar(100)  COLLATE DATABASE_DEFAULT NOT NULL,
+        layer          nvarchar(110)  COLLATE DATABASE_DEFAULT NOT NULL,
+        workercode     nvarchar(100)  COLLATE DATABASE_DEFAULT NULL,
+        name           nvarchar(200)  COLLATE DATABASE_DEFAULT NULL,
+        value          nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+        settingtype    nvarchar(20)   COLLATE DATABASE_DEFAULT NULL,
+        listvalue      nvarchar(1600) COLLATE DATABASE_DEFAULT NULL,
+        ordernr        int            NULL,
+        oldvalue       nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+        oldsettingtype nvarchar(20)   COLLATE DATABASE_DEFAULT NULL,
+        oldlistvalue   nvarchar(1600) COLLATE DATABASE_DEFAULT NULL,
+        oldordernr     int            NULL,
+        backuptable    sysname        COLLATE DATABASE_DEFAULT NULL
+    );
+
+    CREATE TABLE #items
+    (
+        seq            int            NULL,
+        action         nvarchar(12)   COLLATE DATABASE_DEFAULT NOT NULL,
+        physicaltable  sysname        COLLATE DATABASE_DEFAULT NOT NULL,
+        [table]        nvarchar(100)  COLLATE DATABASE_DEFAULT NOT NULL,
+        layer          nvarchar(110)  COLLATE DATABASE_DEFAULT NOT NULL,
+        workercode     nvarchar(100)  COLLATE DATABASE_DEFAULT NULL,
+        name           nvarchar(200)  COLLATE DATABASE_DEFAULT NULL,
+        value          nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+        settingtype    nvarchar(20)   COLLATE DATABASE_DEFAULT NULL,
+        listvalue      nvarchar(1600) COLLATE DATABASE_DEFAULT NULL,
+        ordernr        int            NULL,
+        oldvalue       nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+        oldsettingtype nvarchar(20)   COLLATE DATABASE_DEFAULT NULL,
+        oldlistvalue   nvarchar(1600) COLLATE DATABASE_DEFAULT NULL,
+        oldordernr     int            NULL,
+        backuptable    sysname        COLLATE DATABASE_DEFAULT NULL
+    );
+
+    CREATE TABLE #warnings
+    (
+        seq      int IDENTITY(1,1) NOT NULL,
+        severity nvarchar(10)   COLLATE DATABASE_DEFAULT NOT NULL,
+        code     nvarchar(30)   COLLATE DATABASE_DEFAULT NOT NULL,
+        message  nvarchar(1000) COLLATE DATABASE_DEFAULT NOT NULL
+    );
+
+    EXEC sm.SessionNetChanges @sessionid = @sessionid;
+    EXEC sm.PlanInvert;
+
+    IF NOT EXISTS (SELECT 1 FROM #items)
+        SET @status = N'NoChanges';
+    ELSE
+    BEGIN
+        EXEC sm.PlanItemDuplicates;
+
+        SET @source = CONCAT(N'rollback-session:', @sessionid);
+        EXEC sm.PlanStore
+            @process     = @process,
+            @mode        = N'merge',
+            @description = @description,
+            @source      = @source,
+            @desired     = NULL,
+            @sessionid   = @sessionid,
+            @rollbackof  = NULL,
+            @planid      = @newplanid OUTPUT,
+            @checksum    = @checksum OUTPUT;
+        SET @status = N'Created';
+    END
+
+    SELECT @newplanid AS planid, @checksum AS checksum, @status AS status;
+
+    SELECT seq, action, physicaltable, [table], layer, workercode, name, value, settingtype, listvalue, ordernr,
+           oldvalue, oldsettingtype, oldlistvalue, oldordernr, backuptable
+    FROM #items
+    ORDER BY seq;
+
+    SELECT severity, code, message
+    FROM #warnings
+    ORDER BY seq;
+END
+GO

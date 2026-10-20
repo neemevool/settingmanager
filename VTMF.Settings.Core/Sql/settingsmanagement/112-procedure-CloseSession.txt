@@ -1,0 +1,20 @@
+-- Closes a session and returns it; closing an already closed session returns the row unchanged.
+CREATE OR ALTER PROCEDURE sm.CloseSession
+    @sessionid int
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF NOT EXISTS (SELECT 1 FROM sm.session WHERE id = @sessionid)
+        THROW 51012, N'Session not found.', 1;
+
+    UPDATE sm.session
+    SET status = N'Closed', lastactivity = SYSUTCDATETIME()
+    WHERE id = @sessionid AND status <> N'Closed';
+
+    SELECT s.id, s.name, s.process, s.createdby, s.created, s.lastactivity, s.status,
+           (SELECT COUNT(*) FROM sm.[plan] AS p WHERE p.sessionid = s.id) AS plancount,
+           (SELECT COUNT(*) FROM sm.[plan] AS p WHERE p.sessionid = s.id AND p.appliedat IS NOT NULL) AS appliedcount
+    FROM sm.session AS s
+    WHERE s.id = @sessionid;
+END

@@ -1,0 +1,230 @@
+/*
+  sm.ApplyPlan: applies a Created plan in one SERIALIZABLE transaction, items in seq order.
+  Returns (1) planid, status, message; (2) conflicts: seq, action, physicaltable, workercode, name, expectedvalue,
+  currentvalue, reason (only for Stale; see 141-procedure-PlanCheckItems.txt for the preconditions and reasons).
+
+  Errors (nothing changed, status unchanged): unknown plan 51014, status <> Created 51015, @checksum <> stored checksum
+  or stored checksum <> sm.PlanChecksum (items changed after the preview) 51016.
+  Outcomes (returned, not thrown):
+    Applied  every precondition held and every item was applied; appliedat/appliedby set (only here). A rollback plan
+             marks the plan it rolls back (rollbackof) RolledBack; a session rollback plan (source
+             'rollback-session:{id}') marks the session's Applied plans applied before it was created RolledBack.
+    Stale    a precondition failed: everything is rolled back, all conflicts are reported (and stored as STALE warnings).
+    Failed   any other error: everything is rolled back, message = the error message.
+
+  Rows are found by identity (sm.PlanIdKey); ServerSetting rows are only renumbered (ordernr), never inserted,
+  deleted or given values.
+*/
+CREATE OR ALTER PROCEDURE sm.ApplyPlan
+    @planid   int,
+    @checksum char(64)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+    SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+
+    CREATE TABLE #conflicts
+    (
+        seq           int            NOT NULL,
+        action        nvarchar(12)   COLLATE DATABASE_DEFAULT NOT NULL,
+        physicaltable sysname        COLLATE DATABASE_DEFAULT NOT NULL,
+        workercode    nvarchar(100)  COLLATE DATABASE_DEFAULT NULL,
+        name          nvarchar(200)  COLLATE DATABASE_DEFAULT NULL,
+        expectedvalue nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+        currentvalue  nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+        reason        nvarchar(20)   COLLATE DATABASE_DEFAULT NOT NULL
+    );
+
+    -- Table variables survive ROLLBACK: keeps the conflict found during apply.
+    DECLARE @first TABLE
+    (
+        seq int NOT NULL, action nvarchar(12) NOT NULL, physicaltable sysname NOT NULL, workercode nvarchar(100) NULL,
+        name nvarchar(200) NULL, expectedvalue nvarchar(400) NULL, currentvalue nvarchar(400) NULL, reason nvarchar(20) NOT NULL
+    );
+
+    DECLARE @status nvarchar(12), @message nvarchar(max), @error nvarchar(2048),
+            @planstatus nvarchar(12), @storedchecksum char(64), @sessionid int, @rollbackof int,
+            @source nvarchar(200), @created datetime2(3), @backupdescription nvarchar(400), @rolledbacksession int, @sessionref nvarchar(200),
+            @seq int, @action nvarchar(12), @physicaltable sysname, @workercode nvarchar(100), @name nvarchar(200),
+            @value nvarchar(400), @settingtype nvarchar(20), @listvalue nvarchar(1600), @ordernr int,
+            @oldvalue nvarchar(400), @oldsettingtype nvarchar(20), @key nvarchar(1000),
+            @sql nvarchar(max), @affected int, @backuptable sysname, @now datetime2(0);
+
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        SELECT @planstatus = status, @storedchecksum = checksum, @sessionid = sessionid, @rollbackof = rollbackof,
+               @source = source, @created = created
+        FROM sm.[plan] WITH (UPDLOCK, HOLDLOCK)
+        WHERE id = @planid;
+
+        IF @planstatus IS NULL
+            THROW 51014, N'Plan not found.', 1;
+        IF @planstatus <> N'Created'
+        BEGIN
+            SET @error = CONCAT(N'Plan ', @planid, N' has status ', @planstatus, N'; only Created plans can be applied.');
+            THROW 51015, @error, 1;
+        END
+        IF @checksum IS NULL OR @checksum <> @storedchecksum OR @storedchecksum <> sm.PlanChecksum(@planid)
+            THROW 51016, N'Checksum mismatch: the checksum does not match the plan or the plan was changed after the preview.', 1;
+
+        SET @seq = (SELECT MIN(seq) FROM sm.planitem WHERE planid = @planid);
+        WHILE @seq IS NOT NULL
+        BEGIN
+            EXEC sm.PlanCheckItems @planid = @planid, @seq = @seq;
+            IF EXISTS (SELECT 1 FROM #conflicts)
+                BREAK;
+
+            SELECT @action = action, @physicaltable = physicaltable, @workercode = workercode, @name = name,
+                   @value = value, @settingtype = settingtype, @listvalue = listvalue, @ordernr = ordernr,
+                   @oldvalue = oldvalue, @oldsettingtype = oldsettingtype
+            FROM sm.planitem
+            WHERE planid = @planid AND seq = @seq;
+
+            IF sm.IsSafeName(@physicaltable) = 0
+                THROW 51001, N'Invalid table name.', 1;
+
+            IF @action IN (N'Insert', N'Update', N'Delete')
+            BEGIN
+                IF @settingtype = N'ServerSetting' AND NOT (@action = N'Update' AND @oldsettingtype = N'ServerSetting')
+                   OR (@action = N'Delete' AND @oldsettingtype = N'ServerSetting')
+                    THROW 51007, N'A plan can only renumber ServerSetting rows; it cannot insert, delete or change them.', 1;
+
+                IF @action = N'Insert'
+                    SET @sql = N'
+                        INSERT INTO dbo.' + QUOTENAME(@physicaltable) + N' (NAME, VALUE, settingtype, LISTVALUE, workercode, ordernr)
+                        VALUES (@name, @value, @settingtype, @listvalue, @workercode, @ordernr);';
+                ELSE
+                BEGIN
+                    SET @key = sm.PlanIdKey(@physicaltable, @workercode, @name, @oldvalue, @oldsettingtype);
+                    SET @sql = CASE
+                        WHEN @action = N'Delete' THEN N'DELETE s'
+                        WHEN @oldsettingtype = N'ServerSetting' THEN N'UPDATE s SET ordernr = @ordernr'
+                        ELSE N'UPDATE s SET VALUE = @value, settingtype = @settingtype, LISTVALUE = @listvalue, ordernr = @ordernr'
+                    END + N'
+                        FROM dbo.' + QUOTENAME(@physicaltable) + N' AS s
+                        WHERE s.workercode = @workercode AND s.NAME = @name
+                          AND sm.PlanIdKey(@physicaltable, s.workercode, s.NAME, s.VALUE, s.settingtype) = @key;';
+                END
+                SET @sql = @sql + N'
+                        SET @affected = @@ROWCOUNT;';
+
+                EXEC sys.sp_executesql @sql,
+                    N'@physicaltable sysname, @workercode nvarchar(100), @name nvarchar(200), @value nvarchar(400),
+                      @settingtype nvarchar(20), @listvalue nvarchar(1600), @ordernr int, @key nvarchar(1000), @affected int OUTPUT',
+                    @physicaltable, @workercode, @name, @value, @settingtype, @listvalue, @ordernr, @key, @affected OUTPUT;
+
+                IF @affected <> 1
+                    THROW 51011, N'Plan item matched an unexpected number of rows.', 1;
+            END
+            ELSE IF @action = N'CreateTable'
+            BEGIN
+                SET @sql = N'CREATE TABLE dbo.' + QUOTENAME(@physicaltable) + N'
+                    (NAME nvarchar(200) NOT NULL, VALUE nvarchar(400) NOT NULL, settingtype nvarchar(20) NOT NULL,
+                     LISTVALUE nvarchar(1600) NULL, workercode nvarchar(100) NOT NULL, ordernr int NOT NULL);';
+                EXEC sys.sp_executesql @sql;
+            END
+            ELSE IF @action = N'BackupTable'
+            BEGIN
+                SET @now = SYSUTCDATETIME();
+                SET @backuptable = CONCAT(N'bck_', @physicaltable, N'_', CONVERT(char(8), @now, 112), N'_',
+                                          REPLACE(CONVERT(char(8), @now, 108), N':', N''));
+                IF OBJECT_ID(N'dbo.' + QUOTENAME(@backuptable), N'U') IS NOT NULL
+                    SET @backuptable = CONCAT(@backuptable, N'_', @seq);
+                IF sm.IsSafeName(@backuptable) = 0 OR OBJECT_ID(N'dbo.' + QUOTENAME(@backuptable), N'U') IS NOT NULL
+                    THROW 51001, N'Cannot create a backup table: the name is invalid or already taken.', 1;
+
+                SET @backupdescription = (SELECT LEFT(CONCAT(N'Rollback of plan ', p.id, N': ', p.description), 400)
+                                          FROM sm.[plan] AS p WHERE p.id = ISNULL(@rollbackof, @planid));
+
+                SET @sql = N'
+                    SELECT * INTO dbo.' + QUOTENAME(@backuptable) + N' FROM dbo.' + QUOTENAME(@physicaltable) + N';
+                    INSERT INTO dbo.' + QUOTENAME(@backuptable) + N' (NAME, VALUE, settingtype, LISTVALUE, workercode, ordernr)
+                    VALUES (N''Backup.Description'', @description, N''BackupDescription'', NULL, N''SYSTEM'', 100000);';
+                EXEC sys.sp_executesql @sql, N'@description nvarchar(400)', @backupdescription;
+
+                UPDATE sm.planitem SET backuptable = @backuptable WHERE planid = @planid AND seq = @seq;
+            END
+            ELSE IF @action = N'DropTable'
+            BEGIN
+                SET @sql = N'DROP TABLE dbo.' + QUOTENAME(@physicaltable) + N';';
+                EXEC sys.sp_executesql @sql;
+            END
+
+            SET @seq = (SELECT MIN(seq) FROM sm.planitem WHERE planid = @planid AND seq > @seq);
+        END
+
+        IF EXISTS (SELECT 1 FROM #conflicts)
+        BEGIN
+            INSERT INTO @first SELECT seq, action, physicaltable, workercode, name, expectedvalue, currentvalue, reason FROM #conflicts;
+            ROLLBACK TRANSACTION;
+
+            -- Report every conflict, not only the first one met while applying.
+            DELETE FROM #conflicts;
+            EXEC sm.PlanCheckItems @planid = @planid;
+            INSERT INTO #conflicts (seq, action, physicaltable, workercode, name, expectedvalue, currentvalue, reason)
+            SELECT f.seq, f.action, f.physicaltable, f.workercode, f.name, f.expectedvalue, f.currentvalue, f.reason
+            FROM @first AS f
+            WHERE NOT EXISTS (SELECT 1 FROM #conflicts AS c WHERE c.seq = f.seq);
+
+            SET @status = N'Stale';
+            SET @message = CONCAT(N'The settings changed since the preview (', (SELECT COUNT(*) FROM #conflicts),
+                                  N' conflict(s)); nothing was applied.');
+
+            UPDATE sm.[plan] SET status = @status, message = @message WHERE id = @planid AND status = N'Created';
+
+            INSERT INTO sm.planwarning (planid, severity, code, message)
+            SELECT @planid, N'Warning', N'STALE',
+                   LEFT(CONCAT(N'Item ', seq, N' (', action, N' ', physicaltable,
+                               CASE WHEN name IS NOT NULL THEN CONCAT(N', ', workercode, N', ', name) END, N'): ', reason,
+                               CASE WHEN reason = N'changed' AND (expectedvalue IS NOT NULL OR currentvalue IS NOT NULL)
+                                    THEN CONCAT(N'; expected ''', expectedvalue, N''', current ''', currentvalue, N'''') END,
+                               N'.'), 1000)
+            FROM #conflicts
+            ORDER BY seq;
+        END
+        ELSE
+        BEGIN
+            IF @rollbackof IS NOT NULL
+                UPDATE sm.[plan] SET status = N'RolledBack' WHERE id = @rollbackof AND status = N'Applied';
+
+            IF LEFT(@source, 17) = N'rollback-session:'
+            BEGIN
+                SET @sessionref = SUBSTRING(@source, 18, 200);
+                SET @rolledbacksession = TRY_CONVERT(int, LEFT(@sessionref, PATINDEX(N'%[^0-9]%', @sessionref + N'x') - 1));
+                UPDATE sm.[plan] SET status = N'RolledBack'
+                WHERE sessionid = @rolledbacksession AND status = N'Applied' AND appliedat < @created AND id <> @planid;
+            END
+
+            UPDATE sm.[plan]
+            SET status = N'Applied', appliedat = SYSUTCDATETIME(), appliedby = ORIGINAL_LOGIN(), message = NULL
+            WHERE id = @planid;
+
+            -- Inside the transaction: an error here rolls everything back and reports Failed, never Failed while Applied.
+            IF @sessionid IS NOT NULL
+                UPDATE sm.session SET lastactivity = SYSUTCDATETIME() WHERE id = @sessionid;
+
+            COMMIT TRANSACTION;
+            SET @status = N'Applied';
+        END
+    END TRY
+    BEGIN CATCH
+        IF @@TRANCOUNT > 0
+            ROLLBACK TRANSACTION;
+        IF ERROR_NUMBER() IN (51014, 51015, 51016)
+            THROW;
+
+        SET @status = N'Failed';
+        SET @message = ERROR_MESSAGE();
+        DELETE FROM #conflicts;
+        UPDATE sm.[plan] SET status = @status, message = @message WHERE id = @planid AND status = N'Created';
+    END CATCH
+
+    SELECT @planid AS planid, @status AS status, @message AS message;
+
+    SELECT seq, action, physicaltable, workercode, name, expectedvalue, currentvalue, reason
+    FROM #conflicts
+    ORDER BY seq;
+END
+GO

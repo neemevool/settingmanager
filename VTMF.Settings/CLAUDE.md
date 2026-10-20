@@ -4,31 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Development Tasks
 
-Before starting work on the task check for ambiguities and interview me!
-After completing a task, write the task content as-is to the end of TASKHISTORY.md file 
+Follow the superpowers skill spec and plan pattern. 
 
 ## Project Overview
 
-VTMF.Settings is a centralized settings management Blazor Server application built on ASP.NET Core 9.0. It manages Name-Value pair settings stored in MS SQL Server databases across multiple clients.
+VTMF.Settings is a centralized settings management Blazor Server application built on ASP.NET Core 10.0. It manages Name-Value pair settings stored in MS SQL Server databases across multiple clients.
 
-## Build & Run Commands
-
-```bash
-# Build
-dotnet build VTMF.Settings.csproj
-
-# Run (development, HTTP on port 5045)
-dotnet run --launch-profile http
-
-# Run (development, HTTPS on port 7188)
-dotnet run --launch-profile https
-
-# Docker build & run
-docker build --tag vtmf/settingsmanager:v1.0 .
-docker compose up -d
-```
-
-No test project exists in the solution.
+## Build and test: always via the wrapper
+- Build: `pwsh -NoProfile -File ./eng/verify.ps1 -Mode build`
+- Warnings (when you need them): `pwsh -NoProfile -File ./eng/verify.ps1 -Mode warnings [-Target <project>]` (non-incremental, slower)
+- Tests: `pwsh -NoProfile -File ./eng/verify.ps1 -Mode test -Filter "<filter>"`
+- Gate (must pass before finishing): `pwsh -NoProfile -File ./eng/verify.ps1 -Mode gate`
+- Never call `dotnet build` / `dotnet test` directly (a hook blocks it).
 
 ## Architecture
 

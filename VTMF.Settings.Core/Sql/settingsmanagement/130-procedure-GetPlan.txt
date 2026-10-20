@@ -1,0 +1,27 @@
+-- Returns a plan (all sm.[plan] columns except desired), its items and its warnings.
+CREATE OR ALTER PROCEDURE sm.GetPlan
+    @planid int
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF NOT EXISTS (SELECT 1 FROM sm.[plan] WHERE id = @planid)
+        THROW 51014, N'Plan not found.', 1;
+
+    SELECT id, sessionid, rollbackof, created, createdby, process, description, source, mode, checksum, status,
+           appliedat, appliedby, message
+    FROM sm.[plan]
+    WHERE id = @planid;
+
+    SELECT seq, action, physicaltable, [table], layer, workercode, name, value, settingtype, listvalue, ordernr,
+           oldvalue, oldsettingtype, oldlistvalue, oldordernr, backuptable
+    FROM sm.planitem
+    WHERE planid = @planid
+    ORDER BY seq;
+
+    SELECT severity, code, message
+    FROM sm.planwarning
+    WHERE planid = @planid
+    ORDER BY seq;
+END
+GO

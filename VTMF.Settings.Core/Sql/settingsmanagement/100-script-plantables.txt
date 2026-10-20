@@ -1,0 +1,77 @@
+IF OBJECT_ID(N'sm.session', N'U') IS NULL
+BEGIN
+    CREATE TABLE sm.session
+    (
+        id           int IDENTITY(1,1) NOT NULL CONSTRAINT PK_sm_session PRIMARY KEY,
+        name         nvarchar(200) NOT NULL,
+        process      nvarchar(100) NOT NULL,
+        createdby    nvarchar(128) NOT NULL,
+        created      datetime2(3)  NOT NULL,
+        lastactivity datetime2(3)  NOT NULL,
+        status       nvarchar(10)  NOT NULL
+    );
+END
+GO
+
+IF OBJECT_ID(N'sm.[plan]', N'U') IS NULL
+BEGIN
+    CREATE TABLE sm.[plan]
+    (
+        id          int IDENTITY(1,1) NOT NULL CONSTRAINT PK_sm_plan PRIMARY KEY,
+        sessionid   int NULL CONSTRAINT FK_sm_plan_session REFERENCES sm.session (id),
+        rollbackof  int NULL,
+        created     datetime2(3)  NOT NULL,
+        createdby   nvarchar(128) NOT NULL,
+        process     nvarchar(100) NOT NULL,
+        description nvarchar(400) NULL,
+        source      nvarchar(200) NULL,
+        mode        nvarchar(10)  NOT NULL,
+        desired     nvarchar(max) NULL CONSTRAINT CK_sm_plan_desired CHECK (desired IS NULL OR ISJSON(desired) = 1),
+        checksum    char(64)      NOT NULL,
+        status      nvarchar(12)  NOT NULL,
+        appliedat   datetime2(7)  NULL,
+        appliedby   nvarchar(128) NULL,
+        message     nvarchar(max) NULL
+    );
+END
+GO
+
+IF OBJECT_ID(N'sm.planitem', N'U') IS NULL
+BEGIN
+    CREATE TABLE sm.planitem
+    (
+        planid          int            NOT NULL CONSTRAINT FK_sm_planitem_plan REFERENCES sm.[plan] (id),
+        seq             int            NOT NULL,
+        action          nvarchar(12)   NOT NULL,
+        physicaltable   sysname        NOT NULL,
+        [table]         nvarchar(100)  NOT NULL,
+        layer           nvarchar(110)  NOT NULL,
+        workercode      nvarchar(100)  NULL,
+        name            nvarchar(200)  NULL,
+        value           nvarchar(400)  NULL,
+        settingtype     nvarchar(20)   NULL,
+        listvalue       nvarchar(1600) NULL,
+        ordernr         int            NULL,
+        oldvalue        nvarchar(400)  NULL,
+        oldsettingtype  nvarchar(20)   NULL,
+        oldlistvalue    nvarchar(1600) NULL,
+        oldordernr      int            NULL,
+        backuptable     sysname        NULL,
+        CONSTRAINT PK_sm_planitem PRIMARY KEY (planid, seq)
+    );
+END
+GO
+
+IF OBJECT_ID(N'sm.planwarning', N'U') IS NULL
+BEGIN
+    CREATE TABLE sm.planwarning
+    (
+        planid   int NOT NULL CONSTRAINT FK_sm_planwarning_plan REFERENCES sm.[plan] (id),
+        seq      int IDENTITY(1,1) NOT NULL,
+        severity nvarchar(10)   NOT NULL,
+        code     nvarchar(30)   NOT NULL,
+        message  nvarchar(1000) NOT NULL,
+        CONSTRAINT PK_sm_planwarning PRIMARY KEY (planid, seq)
+    );
+END
+GO

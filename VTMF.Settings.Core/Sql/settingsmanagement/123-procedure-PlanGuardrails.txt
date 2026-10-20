@@ -1,0 +1,175 @@
+-- Plan step between load and diff (temp tables: see 129-procedure-CreatePlan.txt). Checks the guardrails of a plan.
+-- Errors go to #warnings with severity Error; if there are any, the number of the first error is thrown with all
+-- error messages joined by a newline (nothing is stored):
+--   SERVERSETTING (51007)  a desired row has settingtype ServerSetting, or its identity matches an existing
+--                          ServerSetting row (replace scopes never delete ServerSetting rows: see sm.PlanDiff).
+--   ALIAS_TARGET  (51009)  the own table is missing, the alias process (SETTINGPROCEDURES) has it, and neither
+--                          targetAlias nor createTable is set.
+--   TABLE_MISSING (51010)  the physical table is missing (no alias table) and createTable is not set.
+--   DUPLICATE_ROW (51011)  a touched identity (desired row, or current row of a replace scope) has more than one
+--                          physical row.
+-- Without errors: a CreateTable item per missing table (createTable) with warning CREATE_TABLE, and the warnings
+-- ALIAS_TARGET (plan writes to the alias table; names the variants), OVERRIDE_PROC (active Get{process}{view}Info
+-- for a touched base table, same rule as sm.GetTables) and LEGACY_ENV (touched base table has rows with
+-- workercode <> 'ALL'). Messages never contain ServerSetting values (#current holds them as NULL).
+-- Runs before sm.PlanDiff: the renumbering Updates sm.PlanOrder adds for ServerSetting rows (ordernr only, NULL
+-- values) are not desired rows and are therefore not refused.
+CREATE OR ALTER PROCEDURE sm.PlanGuardrails
+    @process     nvarchar(100),
+    @createTable bit = 0
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    SET @createTable = ISNULL(@createTable, 0);
+
+    INSERT INTO #warnings (severity, code, message)
+    SELECT N'Error', N'SERVERSETTING',
+           LEFT(CONCAT(N'ServerSetting rows are not managed by plans: ', d.[table], N' (', d.layer, N') ', d.apiname,
+                       CASE WHEN d.settingtype = N'ServerSetting' THEN N' has settingtype ServerSetting.'
+                            ELSE N' is an existing ServerSetting row.' END), 1000)
+    FROM #desired AS d
+    WHERE d.settingtype = N'ServerSetting'
+       OR EXISTS (SELECT 1 FROM #current AS c WHERE c.idkey = d.idkey AND c.settingtype = N'ServerSetting')
+    ORDER BY d.rowno;
+
+    DECLARE @alias nvarchar(100) = (SELECT TOP (1) aliasof FROM #scope WHERE aliasof IS NOT NULL);
+    DECLARE @variants nvarchar(max) =
+        (SELECT STRING_AGG(CONVERT(nvarchar(max), NAME), N', ') WITHIN GROUP (ORDER BY NAME)
+         FROM dbo.processtypes
+         WHERE SETTINGPROCEDURES = @alias AND NAME <> @alias);
+
+    IF @createTable = 0
+        INSERT INTO #warnings (severity, code, message)
+        SELECT N'Error', N'ALIAS_TARGET',
+               LEFT(CONCAT(N'Process ', @process, N' has no own table ', s.physicaltable, N' (', s.[table], N', ', s.layer,
+                           N'); it uses the table ', s.aliasof + s.[table] + l.suffix, N' of alias process ', s.aliasof,
+                           N', shared by: ', @variants,
+                           N'. Set targetAlias=true to change the shared alias table, or createTable=true to create an own table.'), 1000)
+        FROM #scope AS s
+        CROSS APPLY sm.ResolveLayer(s.layer) AS l
+        WHERE s.tableexists = 0 AND s.aliasof IS NOT NULL
+        ORDER BY s.physicaltable;
+
+    IF @createTable = 0
+        INSERT INTO #warnings (severity, code, message)
+        SELECT N'Error', N'TABLE_MISSING',
+               LEFT(CONCAT(N'Table not found: ', s.physicaltable, N' (', s.[table], N', ', s.layer,
+                           N'). Set createTable=true to create it.'), 1000)
+        FROM #scope AS s
+        WHERE s.tableexists = 0 AND s.aliasof IS NULL
+        ORDER BY s.physicaltable;
+
+    WITH touched AS
+    (
+        SELECT d.idkey FROM #desired AS d
+        UNION
+        SELECT c.idkey
+        FROM #current AS c
+        JOIN #scope AS s ON s.physicaltable = c.physicaltable AND s.workercode = c.workercode
+        WHERE s.replacescope = 1 AND c.settingtype <> N'ServerSetting'
+    ),
+    dup AS
+    (
+        SELECT c.idkey, MIN(c.physicaltable) AS physicaltable, MIN(c.workercode) AS workercode, MIN(c.name) AS name,
+               MIN(c.value) AS value, MIN(c.settingtype) AS settingtype, MAX(c.settingtype) AS maxsettingtype,
+               COUNT(*) AS n
+        FROM #current AS c
+        WHERE c.idkey IN (SELECT idkey FROM touched)
+        GROUP BY c.idkey
+        HAVING COUNT(*) > 1
+    )
+    INSERT INTO #warnings (severity, code, message)
+    SELECT N'Error', N'DUPLICATE_ROW',
+           LEFT(CONCAT(N'Duplicate rows in ', physicaltable, N' (workercode ', workercode, N'): NAME ', name,
+                       -- value-keyed group identity (see idkey): all rows are SettingGroup and not name-keyed
+                       CASE WHEN settingtype = N'SettingGroup' AND maxsettingtype = N'SettingGroup' AND LEFT(name, 7) <> N'Detail.'
+                            THEN N' VALUE ' + value END,
+                       N' occurs ', n, N' times. Clean up the duplicates before planning changes to this row.'), 1000)
+    FROM dup
+    ORDER BY physicaltable, workercode, name, value;
+
+    IF EXISTS (SELECT 1 FROM #warnings WHERE severity = N'Error')
+    BEGIN
+        DECLARE @number int, @message nvarchar(2048);
+        SELECT TOP (1) @number = CASE code
+                                     WHEN N'SERVERSETTING' THEN 51007
+                                     WHEN N'ALIAS_TARGET'  THEN 51009
+                                     WHEN N'TABLE_MISSING' THEN 51010
+                                     WHEN N'DUPLICATE_ROW' THEN 51011
+                                 END
+        FROM #warnings
+        WHERE severity = N'Error'
+        ORDER BY seq;
+        SELECT @message = LEFT(STRING_AGG(CONVERT(nvarchar(max), message), NCHAR(10)) WITHIN GROUP (ORDER BY seq), 2048)
+        FROM #warnings
+        WHERE severity = N'Error';
+        THROW @number, @message, 1;
+    END
+
+    INSERT INTO #items (action, physicaltable, [table], layer)
+    SELECT N'CreateTable', physicaltable, [table], layer
+    FROM #scope
+    WHERE tableexists = 0;
+
+    INSERT INTO #warnings (severity, code, message)
+    SELECT N'Warning', N'CREATE_TABLE',
+           LEFT(CONCAT(N'Table ', physicaltable, N' (', [table], N', ', layer, N') does not exist and will be created.'), 1000)
+    FROM #scope
+    WHERE tableexists = 0
+    ORDER BY physicaltable;
+
+    INSERT INTO #warnings (severity, code, message)
+    SELECT N'Warning', N'ALIAS_TARGET',
+           LEFT(CONCAT(N'Process ', @process, N' has no own table for ', [table], N' (', layer, N'); the plan writes to ',
+                       physicaltable, N' of alias process ', aliasof, N', shared by: ', @variants, N'.'), 1000)
+    FROM #scope
+    WHERE tableexists = 1 AND aliasof IS NOT NULL
+    ORDER BY physicaltable;
+
+    INSERT INTO #warnings (severity, code, message)
+    SELECT N'Warning', N'OVERRIDE_PROC',
+           LEFT(CONCAT(N'Active override procedure ', N'Get' + @process + [table] + N'Info', N' exists for ', physicaltable,
+                       N'; the terminal receives this view from the procedure, not from the table.'), 1000)
+    FROM #scope
+    WHERE kind = N'base'
+      AND [table] <> N'ServerProcessSettings'
+      AND OBJECT_ID(N'dbo.' + QUOTENAME(N'Get' + @process + [table] + N'Info'), N'P') IS NOT NULL
+    ORDER BY physicaltable;
+
+    DECLARE @physicaltable sysname, @count int, @workercodes nvarchar(max), @sql nvarchar(max);
+    DECLARE basetables CURSOR LOCAL FAST_FORWARD FOR
+        SELECT DISTINCT physicaltable
+        FROM #scope
+        WHERE kind = N'base' AND tableexists = 1 AND [table] <> N'ServerProcessSettings'
+        ORDER BY physicaltable;
+    OPEN basetables;
+    FETCH NEXT FROM basetables INTO @physicaltable;
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        IF sm.IsSafeName(@physicaltable) = 0
+            THROW 51001, N'Invalid table name.', 1;
+
+        SET @sql = N'
+            SELECT @count = SUM(w.n),
+                   @workercodes = STRING_AGG(CONVERT(nvarchar(max), w.workercode), N'', '') WITHIN GROUP (ORDER BY w.workercode)
+            FROM (SELECT workercode, COUNT(*) AS n
+                  FROM dbo.' + QUOTENAME(@physicaltable) + N'
+                  WHERE workercode <> N''ALL''
+                  GROUP BY workercode) AS w;';
+        SET @count = NULL;
+        EXEC sys.sp_executesql @sql, N'@count int OUTPUT, @workercodes nvarchar(max) OUTPUT', @count OUTPUT, @workercodes OUTPUT;
+
+        IF @count > 0
+            INSERT INTO #warnings (severity, code, message)
+            VALUES (N'Warning', N'LEGACY_ENV',
+                    LEFT(CONCAT(@physicaltable, N' has ', @count, N' rows with a workercode other than ALL (', @workercodes,
+                                N'): legacy environment rows that apply on top of the base rows for those environments.',
+                                N' Consider migrating them to environment overlay tables.'), 1000));
+
+        FETCH NEXT FROM basetables INTO @physicaltable;
+    END
+    CLOSE basetables;
+    DEALLOCATE basetables;
+END
+GO

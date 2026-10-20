@@ -25,9 +25,12 @@ public sealed class SqlServerFixture : IAsyncLifetime
     public const string NewerClientName = "newer";
     public const string ToolFreshClientName = "toolfresh";
     public const string UnreachableClientName = "unreachable";
+    public const string PlanClientName = "plan";
+    public const string TargetClientName = "target";
+    public const string CollateClientName = "collate";
 
     public static string[] AllClientNames { get; } =
-        [ClientName, EmptyClientName, FreshClientName, UpgradeClientName, ConcurrentClientName, BrokenClientName, OutdatedClientName, NewerClientName, ToolFreshClientName, UnreachableClientName];
+        [ClientName, EmptyClientName, FreshClientName, UpgradeClientName, ConcurrentClientName, BrokenClientName, OutdatedClientName, NewerClientName, ToolFreshClientName, UnreachableClientName, PlanClientName, TargetClientName, CollateClientName];
 
     private readonly MsSqlContainer _container = new MsSqlBuilder()
         .WithImage("mcr.microsoft.com/mssql/server:2019-latest")
@@ -47,7 +50,7 @@ public sealed class SqlServerFixture : IAsyncLifetime
         var master = _container.GetConnectionString();
 
         // Level 150 is the SQL Server 2019 maximum: the supported floor.
-        await ExecuteAsync(master, "CREATE DATABASE smtest; ALTER DATABASE smtest SET COMPATIBILITY_LEVEL = 150; CREATE DATABASE smempty; CREATE DATABASE smfresh; CREATE DATABASE smupgrade; CREATE DATABASE smconcurrent; CREATE DATABASE smbroken; CREATE DATABASE smoutdated; CREATE DATABASE smnewer; CREATE DATABASE smtoolfresh;");
+        await ExecuteAsync(master, "CREATE DATABASE smtest; ALTER DATABASE smtest SET COMPATIBILITY_LEVEL = 150; CREATE DATABASE smempty; CREATE DATABASE smfresh; CREATE DATABASE smupgrade; CREATE DATABASE smconcurrent; CREATE DATABASE smbroken; CREATE DATABASE smoutdated; CREATE DATABASE smnewer; CREATE DATABASE smtoolfresh; CREATE DATABASE smplan; CREATE DATABASE smtarget; CREATE DATABASE smcollate COLLATE Estonian_CI_AS_WS;");
 
         var builder = new SqlConnectionStringBuilder(master);
         Connections = new SqlConnectionProvider(new Dictionary<string, SqlConnectionParameters>
@@ -61,6 +64,12 @@ public sealed class SqlServerFixture : IAsyncLifetime
             [OutdatedClientName] = Parameters(builder, "smoutdated", OutdatedClientName),
             [NewerClientName] = Parameters(builder, "smnewer", NewerClientName),
             [ToolFreshClientName] = Parameters(builder, "smtoolfresh", ToolFreshClientName),
+            [PlanClientName] = Parameters(builder, "smplan", PlanClientName),
+            [TargetClientName] = Parameters(builder, "smtarget", TargetClientName),
+            // Database collation (Estonian_CI_AS_WS) differs from tempdb (server default SQL_Latin1_General_CP1_CI_AS):
+            // temp tables must follow the database collation. Case-insensitive because the database5 base scripts
+            // are not identifier-case consistent; width-sensitive so identity matching differs from tempdb's.
+            [CollateClientName] = Parameters(builder, "smcollate", CollateClientName),
             [UnreachableClientName] = new SqlConnectionParameters
             {
                 ClientName = UnreachableClientName,
@@ -75,7 +84,7 @@ public sealed class SqlServerFixture : IAsyncLifetime
         Scripts = SmScriptSet.LoadDefault();
         Installer = new SmInstaller(Connections, Scripts);
 
-        foreach (var client in new[] { ClientName, FreshClientName, UpgradeClientName, ConcurrentClientName, BrokenClientName, OutdatedClientName, NewerClientName, ToolFreshClientName })
+        foreach (var client in new[] { ClientName, FreshClientName, UpgradeClientName, ConcurrentClientName, BrokenClientName, OutdatedClientName, NewerClientName, ToolFreshClientName, PlanClientName, TargetClientName, CollateClientName })
         {
             foreach (var script in Database5Scripts.BaseScripts)
                 await RunScriptFileAsync(Connections.GetConnectionString(client), script);
@@ -83,6 +92,10 @@ public sealed class SqlServerFixture : IAsyncLifetime
 
         await Installer.InstallAsync(ClientName);
         await RunScriptFileAsync(Connections.GetConnectionString(ClientName), Path.Combine(AppContext.BaseDirectory, "TestData", "seed.sql"));
+
+        await Installer.InstallAsync(PlanClientName);
+        await Installer.InstallAsync(TargetClientName);
+        await Installer.InstallAsync(CollateClientName);
 
         await Installer.InstallAsync(UpgradeClientName);
         await ExecuteAsync(Connections.GetConnectionString(UpgradeClientName), "UPDATE sm.moduleinfo SET version = 1");

@@ -1,0 +1,277 @@
+/*
+  sm.CreateLegacyEnvMigrationPlan: stores a plan that moves legacy environment rows (rows in a base table of the process,
+  sm.ProcessTables layer base, with workercode E <> 'ALL'; the rows sm.GetLegacyEnvRows lists) into the overlay table
+  {basetable}{E} with workercode E. Plan metadata: source 'migration', mode merge, desired NULL, rollbackof NULL.
+  Per legacy row (ServerSetting rows are skipped: their values never leave the database):
+    E not a valid environment name (sm.IsSafeName, lowercase env layer rule of sm.ResolveLayer, physical name length)
+    or exactly 2 characters long (sm.ProcessTables would classify {basetable}{E} as a language overlay)
+        no items; warning LEGACY_CONFLICT per (table, E).
+    overlay holds the identity (sm.PlanIdKey) with equal VALUE, settingtype and LISTVALUE (NULL-safe, binary collation)
+        Delete of the legacy row only.
+    overlay holds the identity with a different value
+        no items, the legacy row stays (today's effective value never changes silently); warning LEGACY_CONFLICT naming
+        table, E and NAME (no values).
+    otherwise
+        Insert into the overlay (same ordernr) + Delete from the base table; a missing overlay table gets a CreateTable
+        item (no option needed) and warning CREATE_TABLE. Warning LEGACY_ENV per moved row: sm.GetEffectiveSettings
+        reads only workercode ALL from base tables, so the moved row becomes effective for environment E.
+  Item order: CreateTable items, then per legacy row (table, E, ordernr, NAME) its Insert and Delete.
+  DUPLICATE_ROW (sm.PlanItemDuplicates, 51011, nothing stored) applies. No items: nothing stored, status NoChanges.
+
+  Returns the same result sets as sm.CreatePlan: (1) planid, checksum, status (Created | NoChanges), (2) items,
+  (3) warnings. Errors: invalid process 51001, unknown process 51003, unknown session 51012, closed session 51013,
+  duplicate touched row 51011.
+*/
+CREATE OR ALTER PROCEDURE sm.CreateLegacyEnvMigrationPlan
+    @process   nvarchar(100),
+    @sessionid int
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+
+    DECLARE @sessionstatus nvarchar(10) = (SELECT status FROM sm.session WHERE id = @sessionid);
+    IF @sessionstatus IS NULL
+        THROW 51012, N'Session not found.', 1;
+    IF @sessionstatus = N'Closed'
+        THROW 51013, N'The session is closed; start a new session to create plans.', 1;
+
+    IF sm.IsSafeName(@process) = 0
+        THROW 51001, N'Invalid process name.', 1;
+    IF NOT EXISTS (SELECT 1 FROM dbo.processtypes WHERE NAME = @process)
+        THROW 51003, N'Process not found.', 1;
+
+    DECLARE @status nvarchar(12), @newplanid int, @checksum char(64), @description nvarchar(400);
+
+    CREATE TABLE #items
+    (
+        seq            int            NULL,
+        action         nvarchar(12)   COLLATE DATABASE_DEFAULT NOT NULL,
+        physicaltable  sysname        COLLATE DATABASE_DEFAULT NOT NULL,
+        [table]        nvarchar(100)  COLLATE DATABASE_DEFAULT NOT NULL,
+        layer          nvarchar(110)  COLLATE DATABASE_DEFAULT NOT NULL,
+        workercode     nvarchar(100)  COLLATE DATABASE_DEFAULT NULL,
+        name           nvarchar(200)  COLLATE DATABASE_DEFAULT NULL,
+        value          nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+        settingtype    nvarchar(20)   COLLATE DATABASE_DEFAULT NULL,
+        listvalue      nvarchar(1600) COLLATE DATABASE_DEFAULT NULL,
+        ordernr        int            NULL,
+        oldvalue       nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+        oldsettingtype nvarchar(20)   COLLATE DATABASE_DEFAULT NULL,
+        oldlistvalue   nvarchar(1600) COLLATE DATABASE_DEFAULT NULL,
+        oldordernr     int            NULL,
+        backuptable    sysname        COLLATE DATABASE_DEFAULT NULL
+    );
+
+    CREATE TABLE #warnings
+    (
+        seq      int IDENTITY(1,1) NOT NULL,
+        severity nvarchar(10)   COLLATE DATABASE_DEFAULT NOT NULL,
+        code     nvarchar(30)   COLLATE DATABASE_DEFAULT NOT NULL,
+        message  nvarchar(1000) COLLATE DATABASE_DEFAULT NOT NULL
+    );
+
+    -- Legacy rows (ServerSetting excluded). validenv: E can name an overlay table and an env layer.
+    CREATE TABLE #legacy
+    (
+        physicaltable sysname        COLLATE DATABASE_DEFAULT NOT NULL,
+        [view]        nvarchar(100)  COLLATE DATABASE_DEFAULT NOT NULL,
+        workercode    nvarchar(100)  COLLATE DATABASE_DEFAULT NOT NULL,
+        name          nvarchar(200)  COLLATE DATABASE_DEFAULT NOT NULL,
+        value         nvarchar(400)  COLLATE DATABASE_DEFAULT NOT NULL,
+        settingtype   nvarchar(20)   COLLATE DATABASE_DEFAULT NOT NULL,
+        listvalue     nvarchar(1600) COLLATE DATABASE_DEFAULT NULL,
+        ordernr       int            NOT NULL,
+        validenv      bit            NULL,
+        overlay       sysname        COLLATE DATABASE_DEFAULT NULL,
+        overlayexists bit            NULL,
+        outcome       nvarchar(10)   COLLATE DATABASE_DEFAULT NULL   -- move | delete | conflict
+    );
+
+    -- Overlay rows with workercode E of every existing overlay table (VALUE/LISTVALUE NULL for ServerSetting rows).
+    CREATE TABLE #overlay
+    (
+        physicaltable sysname        COLLATE DATABASE_DEFAULT NOT NULL,
+        workercode    nvarchar(100)  COLLATE DATABASE_DEFAULT NOT NULL,
+        name          nvarchar(200)  COLLATE DATABASE_DEFAULT NOT NULL,
+        value         nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+        settingtype   nvarchar(20)   COLLATE DATABASE_DEFAULT NOT NULL,
+        listvalue     nvarchar(1600) COLLATE DATABASE_DEFAULT NULL
+    );
+
+    DECLARE @t sysname, @v nvarchar(100), @w nvarchar(100), @sql nvarchar(max);
+
+    DECLARE tables CURSOR LOCAL FAST_FORWARD FOR
+        SELECT physicaltable, [view] FROM sm.ProcessTables(@process) WHERE layer = N'base';
+    OPEN tables;
+    FETCH NEXT FROM tables INTO @t, @v;
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        SET @sql = N'INSERT INTO #legacy (physicaltable, [view], workercode, name, value, settingtype, listvalue, ordernr)
+                     SELECT @t, @v, workercode, NAME, VALUE, settingtype, LISTVALUE, ordernr
+                     FROM dbo.' + QUOTENAME(@t) + N'
+                     WHERE workercode <> N''ALL'' AND settingtype <> N''ServerSetting''';
+        EXEC sys.sp_executesql @sql, N'@t sysname, @v nvarchar(100)', @t, @v;
+        FETCH NEXT FROM tables INTO @t, @v;
+    END
+    CLOSE tables;
+    DEALLOCATE tables;
+
+    UPDATE l
+    SET validenv = CASE WHEN sm.IsSafeName(l.workercode) = 1
+                             AND r.kind = N'env'
+                             AND LEN(l.workercode) <> 2
+                             AND LEN(l.physicaltable) + LEN(l.workercode) <= 128
+                        THEN 1 ELSE 0 END
+    FROM #legacy AS l
+    OUTER APPLY sm.ResolveLayer(N'env:' + l.workercode) AS r;
+
+    UPDATE #legacy
+    SET overlay = physicaltable + workercode,
+        overlayexists = CASE WHEN OBJECT_ID(N'dbo.' + QUOTENAME(physicaltable + workercode), N'U') IS NOT NULL THEN 1 ELSE 0 END
+    WHERE validenv = 1;
+
+    DECLARE overlays CURSOR LOCAL FAST_FORWARD FOR
+        SELECT DISTINCT overlay, workercode FROM #legacy WHERE validenv = 1 AND overlayexists = 1;
+    OPEN overlays;
+    FETCH NEXT FROM overlays INTO @t, @w;
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        SET @sql = N'INSERT INTO #overlay (physicaltable, workercode, name, value, settingtype, listvalue)
+                     SELECT @t, workercode, NAME,
+                            CASE WHEN settingtype = N''ServerSetting'' THEN NULL ELSE VALUE END,
+                            settingtype,
+                            CASE WHEN settingtype = N''ServerSetting'' THEN NULL ELSE LISTVALUE END
+                     FROM dbo.' + QUOTENAME(@t) + N' WHERE workercode = @w';
+        EXEC sys.sp_executesql @sql, N'@t sysname, @w nvarchar(100)', @t, @w;
+        FETCH NEXT FROM overlays INTO @t, @w;
+    END
+    CLOSE overlays;
+    DEALLOCATE overlays;
+
+    -- Compare each legacy row with the overlay rows of the same identity: any differing row is a conflict.
+    UPDATE l
+    SET outcome = CASE
+                      WHEN NOT EXISTS (SELECT 1
+                                       FROM #overlay AS o
+                                       WHERE o.physicaltable = l.overlay AND o.workercode = l.workercode AND o.name = l.name
+                                         AND sm.PlanIdKey(o.physicaltable, o.workercode, o.name, o.value, o.settingtype)
+                                           = sm.PlanIdKey(l.overlay, l.workercode, l.name, l.value, l.settingtype))
+                          THEN N'move'
+                      WHEN NOT EXISTS (SELECT 1
+                                       FROM #overlay AS o
+                                       WHERE o.physicaltable = l.overlay AND o.workercode = l.workercode AND o.name = l.name
+                                         AND sm.PlanIdKey(o.physicaltable, o.workercode, o.name, o.value, o.settingtype)
+                                           = sm.PlanIdKey(l.overlay, l.workercode, l.name, l.value, l.settingtype)
+                                         AND EXISTS (SELECT o.value COLLATE Latin1_General_BIN2, o.settingtype COLLATE Latin1_General_BIN2,
+                                                            o.listvalue COLLATE Latin1_General_BIN2
+                                                     EXCEPT
+                                                     SELECT l.value COLLATE Latin1_General_BIN2, l.settingtype COLLATE Latin1_General_BIN2,
+                                                            l.listvalue COLLATE Latin1_General_BIN2))
+                          THEN N'delete'
+                      ELSE N'conflict'
+                  END
+    FROM #legacy AS l
+    WHERE l.validenv = 1;
+
+    -- Items: CreateTable first, then per legacy row its Insert (sub 1) and Delete (sub 2).
+    SELECT ROW_NUMBER() OVER (ORDER BY x.grp, x.physicaltable, x.workercode, x.ordernr, x.name, x.value, x.sub) AS seq,
+           x.action, x.itemtable, x.[view], x.layer, x.itemworker, x.newname, x.newvalue, x.newsettingtype, x.newlistvalue,
+           x.newordernr, x.oldvalue, x.oldsettingtype, x.oldlistvalue, x.oldordernr
+    INTO #ordered
+    FROM (SELECT DISTINCT 0 AS grp, l.overlay AS physicaltable, CONVERT(nvarchar(100), N'') AS workercode, 0 AS ordernr,
+                 CONVERT(nvarchar(200), N'') AS name, CONVERT(nvarchar(400), N'') AS value, 0 AS sub,
+                 N'CreateTable' AS action, l.overlay AS itemtable, l.[view], N'env:' + l.workercode AS layer,
+                 CONVERT(nvarchar(100), NULL) AS itemworker, CONVERT(nvarchar(200), NULL) AS newname,
+                 CONVERT(nvarchar(400), NULL) AS newvalue, CONVERT(nvarchar(20), NULL) AS newsettingtype,
+                 CONVERT(nvarchar(1600), NULL) AS newlistvalue, CONVERT(int, NULL) AS newordernr,
+                 CONVERT(nvarchar(400), NULL) AS oldvalue, CONVERT(nvarchar(20), NULL) AS oldsettingtype,
+                 CONVERT(nvarchar(1600), NULL) AS oldlistvalue, CONVERT(int, NULL) AS oldordernr
+          FROM #legacy AS l
+          WHERE l.outcome = N'move' AND l.overlayexists = 0
+          UNION ALL
+          SELECT 1, l.physicaltable, l.workercode, l.ordernr, l.name, l.value, 1,
+                 N'Insert', l.overlay, l.[view], N'env:' + l.workercode,
+                 l.workercode, l.name, l.value, l.settingtype, l.listvalue, l.ordernr,
+                 NULL, NULL, NULL, NULL
+          FROM #legacy AS l
+          WHERE l.outcome = N'move'
+          UNION ALL
+          SELECT 1, l.physicaltable, l.workercode, l.ordernr, l.name, l.value, 2,
+                 N'Delete', l.physicaltable, l.[view], N'base',
+                 l.workercode, l.name, NULL, NULL, NULL, NULL,
+                 l.value, l.settingtype, l.listvalue, l.ordernr
+          FROM #legacy AS l
+          WHERE l.outcome IN (N'move', N'delete')) AS x;
+
+    INSERT INTO #items (seq, action, physicaltable, [table], layer, workercode, name, value, settingtype, listvalue,
+                        ordernr, oldvalue, oldsettingtype, oldlistvalue, oldordernr, backuptable)
+    SELECT seq, action, itemtable, [view], layer, itemworker, newname, newvalue, newsettingtype, newlistvalue,
+           newordernr, oldvalue, oldsettingtype, oldlistvalue, oldordernr, NULL
+    FROM #ordered;
+
+    INSERT INTO #warnings (severity, code, message)
+    SELECT N'Warning', N'CREATE_TABLE',
+           LEFT(CONCAT(N'Table ', physicaltable, N' (', [table], N', ', layer, N') does not exist and will be created.'), 1000)
+    FROM #items
+    WHERE action = N'CreateTable'
+    ORDER BY seq;
+
+    INSERT INTO #warnings (severity, code, message)
+    SELECT N'Warning', N'LEGACY_CONFLICT',
+           LEFT(CONCAT(N'Table ', physicaltable, N' has ', COUNT(*), N' legacy row(s) with workercode ''', workercode,
+                       N''', which is not a valid environment name (lowercase letters, digits, underscore, not 2 characters long: that names a language table); they are not migrated.'), 1000)
+    FROM #legacy
+    WHERE validenv = 0
+    GROUP BY physicaltable, workercode
+    ORDER BY physicaltable, workercode;
+
+    INSERT INTO #warnings (severity, code, message)
+    SELECT N'Warning', N'LEGACY_ENV',
+           LEFT(CONCAT(N'Legacy row ', name, N' in ', physicaltable, N' for environment ', workercode, N' moves to ', overlay,
+                       N'; from now on it applies to environment ', workercode, N'.'), 1000)
+    FROM #legacy
+    WHERE outcome = N'move'
+    ORDER BY physicaltable, workercode, ordernr, name;
+
+    INSERT INTO #warnings (severity, code, message)
+    SELECT N'Warning', N'LEGACY_CONFLICT',
+           LEFT(CONCAT(N'Table ', physicaltable, N', environment ', workercode, N': NAME ', name,
+                       N' already has a different value in ', overlay,
+                       N'; the legacy row is not migrated and stays. Resolve the conflict manually.'), 1000)
+    FROM #legacy
+    WHERE outcome = N'conflict'
+    ORDER BY physicaltable, workercode, ordernr, name;
+
+    IF NOT EXISTS (SELECT 1 FROM #items)
+        SET @status = N'NoChanges';
+    ELSE
+    BEGIN
+        EXEC sm.PlanItemDuplicates;
+
+        SET @description = LEFT(CONCAT(N'Migrate legacy environment rows of ', @process, N' to overlay tables'), 400);
+        EXEC sm.PlanStore
+            @process     = @process,
+            @mode        = N'merge',
+            @description = @description,
+            @source      = N'migration',
+            @desired     = NULL,
+            @sessionid   = @sessionid,
+            @rollbackof  = NULL,
+            @planid      = @newplanid OUTPUT,
+            @checksum    = @checksum OUTPUT;
+        SET @status = N'Created';
+    END
+
+    SELECT @newplanid AS planid, @checksum AS checksum, @status AS status;
+
+    SELECT seq, action, physicaltable, [table], layer, workercode, name, value, settingtype, listvalue, ordernr,
+           oldvalue, oldsettingtype, oldlistvalue, oldordernr, backuptable
+    FROM #items
+    ORDER BY seq;
+
+    SELECT severity, code, message
+    FROM #warnings
+    ORDER BY seq;
+END
+GO

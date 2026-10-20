@@ -1,0 +1,77 @@
+/*
+  sm.PlanInvert: fills the caller's #items with the inverse of the item set in the caller's #source. Reads only
+  #source, writes only #items (both temp tables are created by the caller; deferred name resolution). Used by
+  sm.CreateRollbackPlan (#source = the items of one applied plan) and by session rollback (#source = the session's
+  net change, filled in the same shape).
+
+  #source    sm.planitem columns minus planid; one row per item to invert (string columns COLLATE DATABASE_DEFAULT,
+             as every plan temp table: see 129-procedure-CreatePlan.txt)
+    seq            int            NOT NULL   order in which the items were applied (unique)
+    action         nvarchar(12)   NOT NULL   CreateTable | Insert | Update | Delete | BackupTable | DropTable
+    physicaltable  sysname        NOT NULL
+    [table]        nvarchar(100)  NOT NULL
+    layer          nvarchar(110)  NOT NULL
+    workercode     nvarchar(100)  NULL
+    name           nvarchar(200)  NULL
+    value          nvarchar(400)  NULL       after-image (NULL for Delete and table items)
+    settingtype    nvarchar(20)   NULL
+    listvalue      nvarchar(1600) NULL
+    ordernr        int            NULL
+    oldvalue       nvarchar(400)  NULL       before-image (NULL for Insert and table items)
+    oldsettingtype nvarchar(20)   NULL
+    oldlistvalue   nvarchar(1600) NULL
+    oldordernr     int            NULL
+    backuptable    sysname        NULL       ignored
+  Image conventions as for #items (129-procedure-CreatePlan.txt); ServerSetting renumbering Updates carry NULL values.
+
+  #items     as in 129-procedure-CreatePlan.txt; must be empty. Filled with seq 1..n:
+    1. one BackupTable per CreateTable in #source (in #source seq order), so a created table is saved before it is
+       emptied and dropped;
+    2. the inverse of every #source item in reverse seq order:
+         Insert      -> Delete       (before-image = the inserted values)
+         Delete      -> Insert       (values = the before-image)
+         Update      -> Update       (images swapped; a ServerSetting renumbering stays value-less)
+         CreateTable -> DropTable
+         DropTable   -> CreateTable
+         BackupTable -> no item      (the backup table stays)
+  backuptable is NULL in every generated item (set by sm.ApplyPlan).
+*/
+CREATE OR ALTER PROCEDURE sm.PlanInvert
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    INSERT INTO #items (seq, action, physicaltable, [table], layer, workercode, name, value, settingtype, listvalue,
+                        ordernr, oldvalue, oldsettingtype, oldlistvalue, oldordernr, backuptable)
+    SELECT ROW_NUMBER() OVER (ORDER BY x.phase, x.sortkey),
+           x.action, x.physicaltable, x.[table], x.layer, x.workercode, x.name, x.value, x.settingtype, x.listvalue,
+           x.ordernr, x.oldvalue, x.oldsettingtype, x.oldlistvalue, x.oldordernr, NULL
+    FROM
+    (
+        SELECT 1 AS phase, s.seq AS sortkey, N'BackupTable' AS action, s.physicaltable, s.[table], s.layer,
+               s.workercode, s.name,
+               CONVERT(nvarchar(400), NULL) AS value, CONVERT(nvarchar(20), NULL) AS settingtype,
+               CONVERT(nvarchar(1600), NULL) AS listvalue, CONVERT(int, NULL) AS ordernr,
+               CONVERT(nvarchar(400), NULL) AS oldvalue, CONVERT(nvarchar(20), NULL) AS oldsettingtype,
+               CONVERT(nvarchar(1600), NULL) AS oldlistvalue, CONVERT(int, NULL) AS oldordernr
+        FROM #source AS s
+        WHERE s.action = N'CreateTable'
+
+        UNION ALL
+
+        SELECT 2, -s.seq,
+               CASE s.action
+                   WHEN N'Insert'      THEN N'Delete'
+                   WHEN N'Delete'      THEN N'Insert'
+                   WHEN N'Update'      THEN N'Update'
+                   WHEN N'CreateTable' THEN N'DropTable'
+                   WHEN N'DropTable'   THEN N'CreateTable'
+               END,
+               s.physicaltable, s.[table], s.layer, s.workercode, s.name,
+               s.oldvalue, s.oldsettingtype, s.oldlistvalue, s.oldordernr,
+               s.value, s.settingtype, s.listvalue, s.ordernr
+        FROM #source AS s
+        WHERE s.action IN (N'Insert', N'Delete', N'Update', N'CreateTable', N'DropTable')
+    ) AS x;
+END
+GO

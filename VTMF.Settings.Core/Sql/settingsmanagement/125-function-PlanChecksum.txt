@@ -1,0 +1,12 @@
+-- Checksum of a stored plan: SHA-256 (lowercase hex) of its items as canonical JSON, ordered by seq.
+CREATE OR ALTER FUNCTION sm.PlanChecksum(@planid int)
+RETURNS char(64)
+AS
+BEGIN
+    RETURN LOWER(CONVERT(varchar(64), HASHBYTES('SHA2_256',
+        (SELECT seq, action, physicaltable, workercode, name, value, settingtype, listvalue, ordernr,
+                oldvalue, oldsettingtype, oldlistvalue, oldordernr
+         FROM sm.planitem WHERE planid = @planid ORDER BY seq
+         FOR JSON PATH, INCLUDE_NULL_VALUES)), 2));
+END
+GO

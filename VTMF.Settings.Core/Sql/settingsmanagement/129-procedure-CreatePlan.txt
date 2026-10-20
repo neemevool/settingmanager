@@ -1,0 +1,292 @@
+/*
+  sm.CreatePlan: diffs a desired state (JSON) against the current rows and stores the result as a plan.
+  Returns (1) header planid, checksum, status (Created | NoChanges | DryRun), (2) items, (3) warnings.
+
+  Shared temp tables. The plan procedures (sm.PlanResolve, sm.PlanLoadCurrent, sm.PlanDiff, sm.PlanStore and
+  later rollback/migration procedures) work on temp tables created by their caller (deferred name resolution).
+  The column lists below are the contract; a caller that only stores a plan (rollback, migration) creates
+  #items and #warnings with exactly these columns, fills them and calls sm.PlanStore.
+  Every string column (nvarchar, sysname, char) of every temp table is declared COLLATE DATABASE_DEFAULT: temp tables
+  otherwise take tempdb's collation, which breaks joins with settings tables (Msg 468) and makes identity matching
+  differ from sm.ApplyPlan / sm.PlanCheckItems, which match in the database collation.
+
+  #desired   one row per desired.rows entry
+    rowno         int            NOT NULL   position in desired.rows (processing order)
+    [table]       nvarchar(100)  NOT NULL   view suffix, or ServerProcessSettings
+    layer         nvarchar(110)  NOT NULL   base | env:{e} | lang:{l}
+    apiname       nvarchar(200)  NOT NULL   NAME as given (without process prefix)
+    name          nvarchar(200)  NULL       physical NAME (sm.PlanResolve; {process}. prefix for ServerProcessSettings)
+    value         nvarchar(400)  NULL       NULL only for op remove
+    settingtype   nvarchar(20)   NOT NULL
+    listvalue     nvarchar(1600) NULL
+    ordernr       int            NULL
+    op            nvarchar(10)   NOT NULL   upsert | remove
+    after         nvarchar(1000) NULL       ordering anchor NAME or NAME=VALUE
+    physicaltable sysname        NULL       sm.PlanResolve
+    workercode    nvarchar(100)  NULL       sm.PlanResolve
+    idkey         computed                  row identity, see below
+
+  #scope     one row per (table, layer) touched by the plan
+    [table]       nvarchar(100)  NOT NULL
+    layer         nvarchar(110)  NOT NULL
+    replacescope  bit            NOT NULL   1 = listed in desired.scope of a replace plan: current rows not desired are deleted
+    kind          nvarchar(10)   NULL       base | env | lang (sm.PlanResolve)
+    physicaltable sysname        NULL       sm.PlanResolve
+    workercode    nvarchar(100)  NULL       sm.PlanResolve
+    tableexists   bit            NULL       sm.PlanResolve (1 also when redirected to the alias table)
+    aliasof       nvarchar(100)  NULL       sm.PlanResolve: alias process (SETTINGPROCEDURES) that has the table while the own
+                                            table is missing; with targetAlias physicaltable is the alias table
+
+  #current   current rows of every (physicaltable, workercode) in #scope (sm.PlanLoadCurrent)
+    physicaltable sysname        NOT NULL
+    workercode    nvarchar(100)  NOT NULL
+    [table]       nvarchar(100)  NOT NULL
+    layer         nvarchar(110)  NOT NULL
+    name          nvarchar(200)  NOT NULL   physical NAME
+    value         nvarchar(400)  NULL       NULL for ServerSetting rows (values never leave the database)
+    settingtype   nvarchar(20)   NOT NULL
+    listvalue     nvarchar(1600) NULL       NULL for ServerSetting rows
+    ordernr       int            NOT NULL
+    idkey         computed                  row identity, see below
+
+  #items     sm.planitem columns minus planid (seq may stay NULL until sm.PlanDiff numbers the items)
+    seq int NULL, action nvarchar(12), physicaltable sysname, [table] nvarchar(100), layer nvarchar(110),
+    workercode nvarchar(100), name nvarchar(200), value nvarchar(400), settingtype nvarchar(20),
+    listvalue nvarchar(1600), ordernr int, oldvalue nvarchar(400), oldsettingtype nvarchar(20),
+    oldlistvalue nvarchar(1600), oldordernr int, backuptable sysname
+    Insert: old* NULL. Delete: value/settingtype/listvalue/ordernr NULL, row data in old*.
+    CreateTable: only physicaltable, [table], layer set (sm.PlanGuardrails).
+
+  #warnings
+    seq int IDENTITY, severity nvarchar(10), code nvarchar(30), message nvarchar(1000)
+    severity Warning, or Error (sm.PlanGuardrails collects errors and throws; a plan with errors is never stored)
+
+  Row identity (idkey, defined identically in #desired and #current; the only place identity is defined):
+  (physicaltable, workercode, NAME), plus VALUE for SettingGroup rows that are not name-keyed
+  (name-keyed groups: NAME starts with 'Detail.'; a group named exactly 'Detail' is keyed by NAME+VALUE).
+  sm.PlanIdKey (127-function-PlanIdKey.txt) is the scalar form of the same expression, used by sm.PlanCheckItems and
+  sm.ApplyPlan (temp-table computed columns cannot call module functions); change both together.
+*/
+CREATE OR ALTER PROCEDURE sm.CreatePlan
+    @desired     nvarchar(max),
+    @description nvarchar(400),
+    @source      nvarchar(200) = N'manual',
+    @options     nvarchar(max) = NULL,
+    @sessionid   int = NULL,
+    @dryrun      bit = 0
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+
+    IF @sessionid IS NOT NULL
+    BEGIN
+        DECLARE @sessionstatus nvarchar(10) = (SELECT status FROM sm.session WHERE id = @sessionid);
+        IF @sessionstatus IS NULL
+            THROW 51012, N'Session not found.', 1;
+        IF @sessionstatus = N'Closed'
+            THROW 51013, N'The session is closed; start a new session to create plans.', 1;
+    END
+
+    IF @desired IS NULL OR ISJSON(@desired) = 0
+        THROW 51006, N'Invalid desired state: not valid JSON.', 1;
+
+    DECLARE @createTable bit = 0, @targetAlias bit = 0;
+    IF @options IS NOT NULL
+    BEGIN
+        IF ISJSON(@options) = 0
+            THROW 51006, N'Invalid options: not valid JSON.', 1;
+        SELECT @createTable = ISNULL(o.createTable, 0), @targetAlias = ISNULL(o.targetAlias, 0)
+        FROM OPENJSON(@options) WITH (createTable bit N'$.createTable', targetAlias bit N'$.targetAlias') AS o;
+        IF @createTable = 1 AND @targetAlias = 1
+            THROW 51006, N'Invalid options: createTable and targetAlias cannot both be true.', 1;
+    END
+
+    DECLARE @process nvarchar(4000) = JSON_VALUE(@desired, N'$.process'),
+            @mode    nvarchar(4000) = LOWER(ISNULL(JSON_VALUE(@desired, N'$.mode'), N'merge'));
+
+    IF @process IS NULL OR LEN(@process) = 0
+        THROW 51006, N'Invalid desired state: process is missing.', 1;
+    IF sm.IsSafeName(@process) = 0 OR LEN(@process) > 100
+        THROW 51006, N'Invalid desired state: invalid process name.', 1;
+    IF @mode NOT IN (N'merge', N'replace')
+        THROW 51006, N'Invalid desired state: unknown mode (use merge or replace).', 1;
+    IF NOT EXISTS (SELECT 1 FROM dbo.processtypes WHERE NAME = @process)
+        THROW 51003, N'Process not found.', 1;
+
+    IF JSON_VALUE(@desired, N'$.rows') IS NOT NULL OR JSON_VALUE(@desired, N'$.scope') IS NOT NULL
+       OR EXISTS (SELECT 1 FROM OPENJSON(@desired, N'$.rows') WHERE type <> 5)
+       OR EXISTS (SELECT 1 FROM OPENJSON(@desired, N'$.scope') WHERE type <> 5)
+        THROW 51006, N'Invalid desired state: rows and scope must be arrays of objects.', 1;
+
+    CREATE TABLE #desired
+    (
+        rowno         int            NOT NULL,
+        [table]       nvarchar(100)  COLLATE DATABASE_DEFAULT NOT NULL,
+        layer         nvarchar(110)  COLLATE DATABASE_DEFAULT NOT NULL,
+        apiname       nvarchar(200)  COLLATE DATABASE_DEFAULT NOT NULL,
+        name          nvarchar(200)  COLLATE DATABASE_DEFAULT NULL,
+        value         nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+        settingtype   nvarchar(20)   COLLATE DATABASE_DEFAULT NOT NULL,
+        listvalue     nvarchar(1600) COLLATE DATABASE_DEFAULT NULL,
+        ordernr       int            NULL,
+        op            nvarchar(10)   COLLATE DATABASE_DEFAULT NOT NULL,
+        after         nvarchar(1000) COLLATE DATABASE_DEFAULT NULL,
+        physicaltable sysname        COLLATE DATABASE_DEFAULT NULL,
+        workercode    nvarchar(100)  COLLATE DATABASE_DEFAULT NULL,
+        idkey AS CONCAT(physicaltable, NCHAR(1), workercode, NCHAR(1), name, NCHAR(1),
+                        CASE WHEN settingtype = N'SettingGroup' AND LEFT(name, 7) <> N'Detail.' THEN N'V' + value ELSE N'-' END)
+    );
+
+    CREATE TABLE #scope
+    (
+        [table]       nvarchar(100) COLLATE DATABASE_DEFAULT NOT NULL,
+        layer         nvarchar(110) COLLATE DATABASE_DEFAULT NOT NULL,
+        replacescope  bit           NOT NULL,
+        kind          nvarchar(10)  COLLATE DATABASE_DEFAULT NULL,
+        physicaltable sysname       COLLATE DATABASE_DEFAULT NULL,
+        workercode    nvarchar(100) COLLATE DATABASE_DEFAULT NULL,
+        tableexists   bit           NULL,
+        aliasof       nvarchar(100) COLLATE DATABASE_DEFAULT NULL
+    );
+
+    CREATE TABLE #current
+    (
+        physicaltable sysname        COLLATE DATABASE_DEFAULT NOT NULL,
+        workercode    nvarchar(100)  COLLATE DATABASE_DEFAULT NOT NULL,
+        [table]       nvarchar(100)  COLLATE DATABASE_DEFAULT NOT NULL,
+        layer         nvarchar(110)  COLLATE DATABASE_DEFAULT NOT NULL,
+        name          nvarchar(200)  COLLATE DATABASE_DEFAULT NOT NULL,
+        value         nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+        settingtype   nvarchar(20)   COLLATE DATABASE_DEFAULT NOT NULL,
+        listvalue     nvarchar(1600) COLLATE DATABASE_DEFAULT NULL,
+        ordernr       int            NOT NULL,
+        idkey AS CONCAT(physicaltable, NCHAR(1), workercode, NCHAR(1), name, NCHAR(1),
+                        CASE WHEN settingtype = N'SettingGroup' AND LEFT(name, 7) <> N'Detail.' THEN N'V' + value ELSE N'-' END)
+    );
+
+    CREATE TABLE #items
+    (
+        seq            int            NULL,
+        action         nvarchar(12)   COLLATE DATABASE_DEFAULT NOT NULL,
+        physicaltable  sysname        COLLATE DATABASE_DEFAULT NOT NULL,
+        [table]        nvarchar(100)  COLLATE DATABASE_DEFAULT NOT NULL,
+        layer          nvarchar(110)  COLLATE DATABASE_DEFAULT NOT NULL,
+        workercode     nvarchar(100)  COLLATE DATABASE_DEFAULT NULL,
+        name           nvarchar(200)  COLLATE DATABASE_DEFAULT NULL,
+        value          nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+        settingtype    nvarchar(20)   COLLATE DATABASE_DEFAULT NULL,
+        listvalue      nvarchar(1600) COLLATE DATABASE_DEFAULT NULL,
+        ordernr        int            NULL,
+        oldvalue       nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+        oldsettingtype nvarchar(20)   COLLATE DATABASE_DEFAULT NULL,
+        oldlistvalue   nvarchar(1600) COLLATE DATABASE_DEFAULT NULL,
+        oldordernr     int            NULL,
+        backuptable    sysname        COLLATE DATABASE_DEFAULT NULL
+    );
+
+    CREATE TABLE #warnings
+    (
+        seq      int IDENTITY(1,1) NOT NULL,
+        severity nvarchar(10)   COLLATE DATABASE_DEFAULT NOT NULL,
+        code     nvarchar(30)   COLLATE DATABASE_DEFAULT NOT NULL,
+        message  nvarchar(1000) COLLATE DATABASE_DEFAULT NOT NULL
+    );
+
+    -- Parse rows as nvarchar(max) first so oversized values are reported instead of silently truncated.
+    SELECT CONVERT(int, r.[key]) AS rowno, x.[table], x.layer, x.name, x.value, x.settingtype, x.listvalue,
+           x.ordernr, LOWER(ISNULL(x.op, N'upsert')) AS op, x.after
+    INTO #rawrows
+    FROM OPENJSON(@desired, N'$.rows') AS r
+    CROSS APPLY OPENJSON(r.value)
+        WITH ([table]     nvarchar(max) N'$.table',
+              layer       nvarchar(max) N'$.layer',
+              name        nvarchar(max) N'$.name',
+              value       nvarchar(max) N'$.value',
+              settingtype nvarchar(max) N'$.settingtype',
+              listvalue   nvarchar(max) N'$.listvalue',
+              ordernr     nvarchar(max) N'$.ordernr',
+              op          nvarchar(max) N'$.op',
+              after       nvarchar(max) N'$.after') AS x;
+
+    DECLARE @problem nvarchar(2048);
+    SELECT TOP (1) @problem = CONCAT(N'Invalid desired state: rows[', w.rowno, N'] ', p.problem)
+    FROM #rawrows AS w
+    CROSS APPLY (SELECT CASE
+                     WHEN sm.IsSafeName(LEFT(w.[table], 200)) = 0 OR LEN(w.[table]) > 100 THEN N'has a missing or invalid table name.'
+                     WHEN w.name IS NULL OR LEN(w.name) = 0 THEN N'has no name.'
+                     WHEN LEN(w.name) > 200 THEN N'has a name longer than 200 characters.'
+                     WHEN w.op NOT IN (N'upsert', N'remove') THEN N'has an unknown op (use upsert or remove).'
+                     WHEN w.op = N'upsert' AND w.value IS NULL THEN N'has no value (required for upsert).'
+                     WHEN LEN(w.value) > 400 THEN N'has a value longer than 400 characters.'
+                     WHEN w.settingtype IS NOT NULL AND LEN(w.settingtype) NOT BETWEEN 1 AND 20 THEN N'has an invalid settingtype.'
+                     WHEN LEN(w.listvalue) > 1600 THEN N'has a listvalue longer than 1600 characters.'
+                     WHEN w.ordernr IS NOT NULL AND TRY_CONVERT(int, w.ordernr) IS NULL THEN N'has an ordernr that is not an integer.'
+                     WHEN LEN(w.layer) > 110 THEN N'has an invalid layer.'
+                     WHEN LEN(w.after) > 1000 THEN N'has an after anchor longer than 1000 characters.'
+                     WHEN @mode = N'replace' AND w.op = N'remove' THEN N'uses op remove; in replace mode list only the rows to keep.'
+                     WHEN @mode = N'replace' AND w.ordernr IS NULL THEN N'has no ordernr (required in replace mode).'
+                 END AS problem) AS p
+    WHERE p.problem IS NOT NULL
+    ORDER BY w.rowno;
+    IF @problem IS NOT NULL
+        THROW 51006, @problem, 1;
+
+    INSERT INTO #desired (rowno, [table], layer, apiname, value, settingtype, listvalue, ordernr, op, after)
+    SELECT rowno, [table], ISNULL(layer, N'base'), name, value, ISNULL(settingtype, N'Setting'), listvalue,
+           TRY_CONVERT(int, ordernr), op, after
+    FROM #rawrows;
+
+    IF @mode = N'replace'
+    BEGIN
+        SELECT TOP (1) @problem = CONCAT(N'Invalid desired state: scope[', r.[key], N'] has a missing or invalid table name or layer.')
+        FROM OPENJSON(@desired, N'$.scope') AS r
+        CROSS APPLY OPENJSON(r.value) WITH ([table] nvarchar(max) N'$.table', layer nvarchar(max) N'$.layer') AS x
+        WHERE sm.IsSafeName(LEFT(x.[table], 200)) = 0 OR LEN(x.[table]) > 100 OR LEN(x.layer) > 110
+        ORDER BY CONVERT(int, r.[key]);
+        IF @problem IS NOT NULL
+            THROW 51006, @problem, 1;
+
+        INSERT INTO #scope ([table], layer, replacescope)
+        SELECT DISTINCT x.[table], ISNULL(x.layer, N'base'), 1
+        FROM OPENJSON(@desired, N'$.scope') AS r
+        CROSS APPLY OPENJSON(r.value) WITH ([table] nvarchar(100) N'$.table', layer nvarchar(110) N'$.layer') AS x;
+    END
+
+    EXEC sm.PlanResolve @process = @process, @mode = @mode, @targetAlias = @targetAlias;
+    EXEC sm.PlanLoadCurrent @process = @process;
+    EXEC sm.PlanGuardrails @process = @process, @createTable = @createTable;
+    EXEC sm.PlanDiff @mode = @mode;
+
+    DECLARE @planid int, @checksum char(64), @status nvarchar(12);
+    IF NOT EXISTS (SELECT 1 FROM #items)
+        SET @status = N'NoChanges';
+    ELSE IF ISNULL(@dryrun, 0) = 1
+        SET @status = N'DryRun';
+    ELSE
+    BEGIN
+        EXEC sm.PlanStore
+            @process     = @process,
+            @mode        = @mode,
+            @description = @description,
+            @source      = @source,
+            @desired     = @desired,
+            @sessionid   = @sessionid,
+            @rollbackof  = NULL,
+            @planid      = @planid OUTPUT,
+            @checksum    = @checksum OUTPUT;
+        SET @status = N'Created';
+    END
+
+    SELECT @planid AS planid, @checksum AS checksum, @status AS status;
+
+    SELECT seq, action, physicaltable, [table], layer, workercode, name, value, settingtype, listvalue, ordernr,
+           oldvalue, oldsettingtype, oldlistvalue, oldordernr, backuptable
+    FROM #items
+    ORDER BY seq;
+
+    SELECT severity, code, message
+    FROM #warnings
+    ORDER BY seq;
+END
+GO
