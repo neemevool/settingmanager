@@ -40,6 +40,12 @@ VTMF.Settings is a centralized settings management Blazor Server application bui
 - **SettingFeatureGroup**: Groups multiple features for batch application.
 - **ProcessType**: Defines processes where settings/features are applied.
 
+The `SettingFeature*` tables above are the old feature model, still used by this UI. The new feature model
+(phase 3: `sm.feature`, `sm.featurerow`, `sm.featureparam`, `sm.featureparamvalue`, `sm.featurestep` in the
+metabase, script set `VTMF.Settings.Core/Sql/settingsmetabase/`) is used by the MCP server and the
+`create-feature` / `apply-feature` skills. The UI does not use it yet; migrating the old tables and the feature
+pages to the new model is phase 4.
+
 ## Code Conventions
 
 - C# 12+ with nullable reference types enabled

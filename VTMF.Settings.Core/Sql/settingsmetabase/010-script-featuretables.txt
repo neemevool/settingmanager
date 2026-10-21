@@ -1,0 +1,84 @@
+IF OBJECT_ID(N'sm.feature', N'U') IS NULL
+BEGIN
+    CREATE TABLE sm.feature
+    (
+        id             int           NOT NULL IDENTITY(1,1) CONSTRAINT PK_sm_feature PRIMARY KEY,
+        name           nvarchar(100) NOT NULL,
+        namekey        AS UPPER(name) PERSISTED,
+        description    nvarchar(max) NOT NULL CONSTRAINT DF_sm_feature_description DEFAULT (N''),
+        status         nvarchar(10)  NOT NULL CONSTRAINT DF_sm_feature_status DEFAULT (N'Draft')
+                                     CONSTRAINT CK_sm_feature_status CHECK (status IN (N'Draft', N'Finished')),
+        builtonprocess nvarchar(100) NULL,
+        createdby      nvarchar(128) NOT NULL,
+        created        datetime2(0)  NOT NULL,
+        modifiedby     nvarchar(128) NOT NULL,
+        modified       datetime2(0)  NOT NULL,
+        revision       rowversion
+    );
+    CREATE UNIQUE INDEX UX_feature_namekey ON sm.feature (namekey);
+END
+GO
+
+IF OBJECT_ID(N'sm.featurerow', N'U') IS NULL
+BEGIN
+    CREATE TABLE sm.featurerow
+    (
+        featureid   int            NOT NULL CONSTRAINT FK_sm_featurerow_feature REFERENCES sm.feature (id) ON DELETE CASCADE,
+        seq         int            NOT NULL,
+        tablekind   nvarchar(100)  NOT NULL,
+        layer       nvarchar(100)  NOT NULL CONSTRAINT DF_sm_featurerow_layer DEFAULT (N'base'),
+        name        nvarchar(200)  NOT NULL,
+        value       nvarchar(400)  NULL,
+        settingtype nvarchar(20)   NOT NULL CONSTRAINT CK_sm_featurerow_settingtype CHECK (settingtype IN (N'Setting', N'SettingGroup')),
+        listvalue   nvarchar(1600) NULL,
+        op          nvarchar(10)   NOT NULL CONSTRAINT CK_sm_featurerow_op CHECK (op IN (N'set', N'remove')),
+        after       nvarchar(600)  NULL,
+        note        nvarchar(1000) NULL,
+        CONSTRAINT PK_sm_featurerow PRIMARY KEY (featureid, seq)
+    );
+END
+GO
+
+IF OBJECT_ID(N'sm.featureparam', N'U') IS NULL
+BEGIN
+    CREATE TABLE sm.featureparam
+    (
+        featureid    int            NOT NULL CONSTRAINT FK_sm_featureparam_feature REFERENCES sm.feature (id) ON DELETE CASCADE,
+        name         nvarchar(50)   NOT NULL,
+        seq          int            NOT NULL,
+        description  nvarchar(1000) NOT NULL CONSTRAINT DF_sm_featureparam_description DEFAULT (N''),
+        type         nvarchar(10)   NOT NULL CONSTRAINT CK_sm_featureparam_type CHECK (type IN (N'Text', N'Number', N'Boolean', N'List')),
+        defaultvalue nvarchar(400)  NULL,
+        CONSTRAINT PK_sm_featureparam PRIMARY KEY (featureid, name)
+    );
+END
+GO
+
+IF OBJECT_ID(N'sm.featureparamvalue', N'U') IS NULL
+BEGIN
+    CREATE TABLE sm.featureparamvalue
+    (
+        featureid   int            NOT NULL,
+        paramname   nvarchar(50)   NOT NULL,
+        seq         int            NOT NULL,
+        value       nvarchar(400)  NOT NULL,
+        description nvarchar(1000) NOT NULL CONSTRAINT DF_sm_featureparamvalue_description DEFAULT (N''),
+        CONSTRAINT PK_sm_featureparamvalue PRIMARY KEY (featureid, paramname, seq),
+        CONSTRAINT FK_sm_featureparamvalue_param FOREIGN KEY (featureid, paramname)
+            REFERENCES sm.featureparam (featureid, name) ON DELETE CASCADE
+    );
+END
+GO
+
+IF OBJECT_ID(N'sm.featurestep', N'U') IS NULL
+BEGIN
+    CREATE TABLE sm.featurestep
+    (
+        featureid int           NOT NULL CONSTRAINT FK_sm_featurestep_feature REFERENCES sm.feature (id) ON DELETE CASCADE,
+        seq       int           NOT NULL,
+        text      nvarchar(max) NOT NULL,
+        sql       nvarchar(max) NULL,
+        CONSTRAINT PK_sm_featurestep PRIMARY KEY (featureid, seq)
+    );
+END
+GO

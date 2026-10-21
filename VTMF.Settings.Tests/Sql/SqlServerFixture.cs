@@ -2,6 +2,7 @@ using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging.Abstractions;
 using Testcontainers.MsSql;
 using VTMF.Settings.Core.Sm;
+using VTMF.Settings.Core.Sm.Features;
 using VTMF.Settings.Services;
 using VTMF.SQLInstaller.Services;
 
@@ -28,9 +29,10 @@ public sealed class SqlServerFixture : IAsyncLifetime
     public const string PlanClientName = "plan";
     public const string TargetClientName = "target";
     public const string CollateClientName = "collate";
+    public const string Coexist = "coexist";
 
     public static string[] AllClientNames { get; } =
-        [ClientName, EmptyClientName, FreshClientName, UpgradeClientName, ConcurrentClientName, BrokenClientName, OutdatedClientName, NewerClientName, ToolFreshClientName, UnreachableClientName, PlanClientName, TargetClientName, CollateClientName];
+        [ClientName, EmptyClientName, FreshClientName, UpgradeClientName, ConcurrentClientName, BrokenClientName, OutdatedClientName, NewerClientName, ToolFreshClientName, UnreachableClientName, PlanClientName, TargetClientName, CollateClientName, Coexist];
 
     private readonly MsSqlContainer _container = new MsSqlBuilder()
         .WithImage("mcr.microsoft.com/mssql/server:2019-latest")
@@ -44,13 +46,19 @@ public sealed class SqlServerFixture : IAsyncLifetime
 
     public SmInstaller Installer { get; private set; } = null!;
 
+    public SmMetabaseScripts MetabaseScripts { get; private set; } = null!;
+
+    public SmFeatureStore FeatureStore => new(Connections, MetabaseScripts);
+
+    public SmFeatureInstaller FeatureInstaller { get; private set; } = null!;
+
     public async Task InitializeAsync()
     {
         await _container.StartAsync();
         var master = _container.GetConnectionString();
 
         // Level 150 is the SQL Server 2019 maximum: the supported floor.
-        await ExecuteAsync(master, "CREATE DATABASE smtest; ALTER DATABASE smtest SET COMPATIBILITY_LEVEL = 150; CREATE DATABASE smempty; CREATE DATABASE smfresh; CREATE DATABASE smupgrade; CREATE DATABASE smconcurrent; CREATE DATABASE smbroken; CREATE DATABASE smoutdated; CREATE DATABASE smnewer; CREATE DATABASE smtoolfresh; CREATE DATABASE smplan; CREATE DATABASE smtarget; CREATE DATABASE smcollate COLLATE Estonian_CI_AS_WS;");
+        await ExecuteAsync(master, "CREATE DATABASE smtest; ALTER DATABASE smtest SET COMPATIBILITY_LEVEL = 150; CREATE DATABASE smempty; CREATE DATABASE smfresh; CREATE DATABASE smupgrade; CREATE DATABASE smconcurrent; CREATE DATABASE smbroken; CREATE DATABASE smoutdated; CREATE DATABASE smnewer; CREATE DATABASE smtoolfresh; CREATE DATABASE smplan; CREATE DATABASE smtarget; CREATE DATABASE smcollate COLLATE Estonian_CI_AS_WS; CREATE DATABASE smmeta; CREATE DATABASE smcoexist;");
 
         var builder = new SqlConnectionStringBuilder(master);
         Connections = new SqlConnectionProvider(new Dictionary<string, SqlConnectionParameters>
@@ -70,6 +78,7 @@ public sealed class SqlServerFixture : IAsyncLifetime
             // temp tables must follow the database collation. Case-insensitive because the database5 base scripts
             // are not identifier-case consistent; width-sensitive so identity matching differs from tempdb's.
             [CollateClientName] = Parameters(builder, "smcollate", CollateClientName),
+            [Coexist] = Parameters(builder, "smcoexist", Coexist),
             [UnreachableClientName] = new SqlConnectionParameters
             {
                 ClientName = UnreachableClientName,
@@ -77,14 +86,16 @@ public sealed class SqlServerFixture : IAsyncLifetime
                 UserId = "sa",
                 Password = "unused",
             },
-            // Not a client: lets tests prove the installer guard rather than the unknown-key path.
-            [SqlConnectionParameters.DefaultMetaBaseClientName] = Parameters(builder, "smempty", SqlConnectionParameters.DefaultMetaBaseClientName),
+            // Not a client: lets tests prove the installer guard rather than the unknown-key path. Hosts the settingsmetabase module.
+            [SqlConnectionParameters.DefaultMetaBaseClientName] = Parameters(builder, "smmeta", SqlConnectionParameters.DefaultMetaBaseClientName),
         });
 
         Scripts = SmScriptSet.LoadDefault();
         Installer = new SmInstaller(Connections, Scripts);
+        MetabaseScripts = new SmMetabaseScripts(SmScriptSet.LoadMetabase());
+        FeatureInstaller = new SmFeatureInstaller(Connections, MetabaseScripts);
 
-        foreach (var client in new[] { ClientName, FreshClientName, UpgradeClientName, ConcurrentClientName, BrokenClientName, OutdatedClientName, NewerClientName, ToolFreshClientName, PlanClientName, TargetClientName, CollateClientName })
+        foreach (var client in new[] { ClientName, FreshClientName, UpgradeClientName, ConcurrentClientName, BrokenClientName, OutdatedClientName, NewerClientName, ToolFreshClientName, PlanClientName, TargetClientName, CollateClientName, Coexist })
         {
             foreach (var script in Database5Scripts.BaseScripts)
                 await RunScriptFileAsync(Connections.GetConnectionString(client), script);
@@ -96,6 +107,9 @@ public sealed class SqlServerFixture : IAsyncLifetime
         await Installer.InstallAsync(PlanClientName);
         await Installer.InstallAsync(TargetClientName);
         await Installer.InstallAsync(CollateClientName);
+
+        await Installer.InstallAsync(Coexist);
+        await FeatureInstaller.InstallAsync();
 
         await Installer.InstallAsync(UpgradeClientName);
         await ExecuteAsync(Connections.GetConnectionString(UpgradeClientName), "UPDATE sm.moduleinfo SET version = 1");

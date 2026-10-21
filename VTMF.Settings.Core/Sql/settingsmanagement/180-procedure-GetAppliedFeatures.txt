@@ -1,0 +1,29 @@
+-- Lists features currently applied (plan source 'feature:{id}:{name}', status Applied): latest plan per feature and process, newest first.
+CREATE OR ALTER PROCEDURE sm.GetAppliedFeatures
+    @process nvarchar(100) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    WITH parsed AS
+    (
+        SELECT p.id, p.process, p.appliedat, p.appliedby,
+               TRY_CONVERT(int, SUBSTRING(p.source, 9, CHARINDEX(N':', p.source, 9) - 9)) AS featureid,
+               SUBSTRING(p.source, CHARINDEX(N':', p.source, 9) + 1, 200) AS featurename
+        FROM sm.[plan] p
+        WHERE p.status = N'Applied'
+          AND p.source LIKE N'feature:%:%'
+          AND (@process IS NULL OR p.process = @process)
+    ),
+    ranked AS
+    (
+        SELECT *, ROW_NUMBER() OVER (PARTITION BY featureid, process ORDER BY appliedat DESC, id DESC) AS rn
+        FROM parsed
+        WHERE featureid IS NOT NULL
+    )
+    SELECT featureid, featurename, process, id AS planid, appliedat, appliedby
+    FROM ranked
+    WHERE rn = 1
+    ORDER BY appliedat DESC, planid DESC;
+END
+GO

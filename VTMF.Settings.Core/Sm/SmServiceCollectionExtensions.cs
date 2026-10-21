@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using VTMF.Settings.Core.Sm.Features;
 
 namespace VTMF.Settings.Core.Sm;
 
@@ -11,6 +12,10 @@ public static class SmServiceCollectionExtensions
         services.AddSingleton(_ => SmScriptSet.LoadDefault());
         services.AddSingleton<SmInstaller>();
         services.AddSingleton<SmOrchestrator>();
+        services.AddSingleton(_ => new SmMetabaseScripts(SmScriptSet.LoadMetabase()));
+        services.AddSingleton<SmFeatureInstaller>();
+        services.AddSingleton<SmFeatureStore>();
+        services.AddSingleton<SmFeaturePlanner>();
         return services;
     }
 }

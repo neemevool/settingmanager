@@ -16,7 +16,7 @@ public sealed class SmClient(SqlConnectionProvider connections, SmScriptSet scri
     public async Task<SmModuleInfo?> GetModuleInfoAsync(string client, CancellationToken cancellationToken = default)
     {
         var rows = await QueryUngatedAsync<SmModuleInfo>(client, "sm.GetModuleInfo", null, cancellationToken).ConfigureAwait(false);
-        return rows.Count > 0 ? rows[0] : null;
+        return rows.FirstOrDefault(r => string.Equals(r.Module, scripts.ModuleName, StringComparison.OrdinalIgnoreCase));
     }
 
     public async Task<SmModuleStatus> GetModuleStatusAsync(string client, CancellationToken cancellationToken = default)
@@ -158,6 +158,10 @@ public sealed class SmClient(SqlConnectionProvider connections, SmScriptSet scri
     public Task<IReadOnlyList<SmPlan>> GetPlansAsync(
         string client, string? process = null, int? sessionId = null, int top = 20, CancellationToken cancellationToken = default) =>
         QueryAsync<SmPlan>(client, "sm.GetPlans", new { process, sessionid = sessionId, top }, cancellationToken);
+
+    public Task<IReadOnlyList<SmAppliedFeature>> GetAppliedFeaturesAsync(
+        string client, string? process = null, CancellationToken cancellationToken = default) =>
+        QueryAsync<SmAppliedFeature>(client, "sm.GetAppliedFeatures", new { process }, cancellationToken);
 
     private SmModuleStatus Status(int? version) => new()
     {

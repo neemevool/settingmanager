@@ -22,6 +22,18 @@ public static class SmErrorCodes
     public const string PlanNotFound = "plan_not_found";
     public const string PlanStatus = "plan_status";
     public const string ChecksumMismatch = "checksum_mismatch";
+    public const string MetabaseNotConfigured = "metabase_not_configured";
+    public const string FeatureModuleNotInstalled = "feature_module_not_installed";
+    public const string FeatureModuleOutdated = "feature_module_outdated";
+    public const string FeatureModuleNewerThanTool = "feature_module_newer_than_tool";
+    public const string FeatureNotFinished = "feature_not_finished";
+    public const string FeatureParamMissing = "feature_param_missing";
+    public const string FeatureParamInvalid = "feature_param_invalid";
+    public const string FeatureNotFound = "feature_not_found";
+    public const string FeatureInvalid = "feature_invalid";
+    public const string FeatureChanged = "feature_changed";
+    public const string FeatureNameTaken = "feature_name_taken";
+    public const string FeatureStatus = "feature_status";
     public const string SmError = "sm_error";
 
     internal static string FromSqlErrorNumber(int number) => number switch
@@ -42,6 +54,11 @@ public static class SmErrorCodes
         51014 => PlanNotFound,
         51015 => PlanStatus,
         51016 => ChecksumMismatch,
+        52001 => FeatureNotFound,
+        52002 => FeatureInvalid,
+        52003 => FeatureChanged,
+        52004 => FeatureNameTaken,
+        52005 => FeatureStatus,
         _ => SmError,
     };
 }

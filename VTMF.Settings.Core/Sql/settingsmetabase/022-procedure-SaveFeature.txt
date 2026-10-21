@@ -1,0 +1,155 @@
+-- Creates (no id in the document: Draft) or replaces (id given: header and all children) a feature from a JSON document.
+-- Never changes status. Replacing needs the current @revision. Returns id, revision.
+CREATE OR ALTER PROCEDURE sm.SaveFeature
+    @json     nvarchar(max),
+    @revision bigint = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+
+    IF @json IS NULL OR ISJSON(@json) <> 1
+        THROW 52002, N'The feature document is not valid JSON.', 1;
+
+    DECLARE @id int, @name nvarchar(max), @description nvarchar(max), @builtonprocess nvarchar(max);
+    SELECT @id = id, @name = LTRIM(RTRIM(name)), @description = ISNULL(description, N''), @builtonprocess = builtonprocess
+    FROM OPENJSON(@json) WITH (
+        id             int            '$.id',
+        name           nvarchar(max)  '$.name',
+        description    nvarchar(max)  '$.description',
+        builtonprocess nvarchar(max)  '$.builtOnProcess');
+
+    IF @name IS NULL OR @name = N''
+        THROW 52002, N'The feature needs a name.', 1;
+
+    IF LEN(@name) > 100
+        THROW 52002, N'Feature name is longer than 100 characters.', 1;
+    IF LEN(@builtonprocess) > 100
+        THROW 52002, N'builtOnProcess is longer than 100 characters.', 1;
+
+    DECLARE @toolong nvarchar(300);
+
+    SELECT TOP (1) @toolong = N'Row ' + CONVERT(nvarchar(10), CONVERT(int, r.[key]) + 1) + N' ' + c.field
+                              + N' is longer than ' + CONVERT(nvarchar(10), c.maxlen) + N' characters.'
+    FROM OPENJSON(@json, '$.rows') AS r
+    CROSS APPLY OPENJSON(r.value) WITH (
+        tablekind nvarchar(max) '$.table', layer nvarchar(max) '$.layer', name nvarchar(max) '$.name',
+        value nvarchar(max) '$.value', settingtype nvarchar(max) '$.settingtype', listvalue nvarchar(max) '$.listvalue',
+        op nvarchar(max) '$.op', after nvarchar(max) '$.after', note nvarchar(max) '$.note') AS x
+    CROSS APPLY (VALUES (N'table', 100, LEN(x.tablekind)), (N'layer', 100, LEN(x.layer)), (N'name', 200, LEN(x.name)),
+                        (N'value', 400, LEN(x.value)), (N'settingtype', 20, LEN(x.settingtype)),
+                        (N'listvalue', 1600, LEN(x.listvalue)), (N'op', 10, LEN(x.op)),
+                        (N'after', 600, LEN(x.after)), (N'note', 1000, LEN(x.note))) AS c(field, maxlen, actual)
+    WHERE c.actual > c.maxlen
+    ORDER BY CONVERT(int, r.[key]);
+    IF @toolong IS NOT NULL
+        THROW 52002, @toolong, 1;
+
+    SELECT TOP (1) @toolong = N'Param ' + CONVERT(nvarchar(10), CONVERT(int, p.[key]) + 1) + N' ' + c.field
+                              + N' is longer than ' + CONVERT(nvarchar(10), c.maxlen) + N' characters.'
+    FROM OPENJSON(@json, '$.params') AS p
+    CROSS APPLY OPENJSON(p.value) WITH (
+        name nvarchar(max) '$.name', description nvarchar(max) '$.description', type nvarchar(max) '$.type',
+        defaultvalue nvarchar(max) '$.default') AS x
+    CROSS APPLY (VALUES (N'name', 50, LEN(x.name)), (N'description', 1000, LEN(x.description)),
+                        (N'type', 10, LEN(x.type)), (N'default', 400, LEN(x.defaultvalue))) AS c(field, maxlen, actual)
+    WHERE c.actual > c.maxlen
+    ORDER BY CONVERT(int, p.[key]);
+    IF @toolong IS NOT NULL
+        THROW 52002, @toolong, 1;
+
+    SELECT TOP (1) @toolong = N'Param ' + CONVERT(nvarchar(10), CONVERT(int, p.[key]) + 1) + N' value '
+                              + CONVERT(nvarchar(10), CONVERT(int, v.[key]) + 1) + N' ' + c.field
+                              + N' is longer than ' + CONVERT(nvarchar(10), c.maxlen) + N' characters.'
+    FROM OPENJSON(@json, '$.params') AS p
+    CROSS APPLY OPENJSON(p.value) WITH ([values] nvarchar(max) '$.values' AS JSON) AS x
+    CROSS APPLY OPENJSON(x.[values]) AS v
+    CROSS APPLY OPENJSON(v.value) WITH (value nvarchar(max) '$.value', description nvarchar(max) '$.description') AS y
+    CROSS APPLY (VALUES (N'value', 400, LEN(y.value)), (N'description', 1000, LEN(y.description))) AS c(field, maxlen, actual)
+    WHERE c.actual > c.maxlen
+    ORDER BY CONVERT(int, p.[key]), CONVERT(int, v.[key]);
+    IF @toolong IS NOT NULL
+        THROW 52002, @toolong, 1;
+
+    DECLARE @now datetime2(0) = SYSUTCDATETIME();
+
+    BEGIN TRANSACTION;
+
+    IF @id IS NULL
+    BEGIN
+        IF EXISTS (SELECT 1 FROM sm.feature WHERE namekey = UPPER(@name))
+            THROW 52004, N'Another feature already has this name.', 1;
+
+        INSERT INTO sm.feature (name, description, status, builtonprocess, createdby, created, modifiedby, modified)
+        VALUES (@name, @description, N'Draft', @builtonprocess, ORIGINAL_LOGIN(), @now, ORIGINAL_LOGIN(), @now);
+        SET @id = CONVERT(int, SCOPE_IDENTITY());
+    END
+    ELSE
+    BEGIN
+        DECLARE @current bigint;
+        SELECT @current = CONVERT(bigint, revision) FROM sm.feature WITH (UPDLOCK, HOLDLOCK) WHERE id = @id;
+
+        IF @current IS NULL
+            THROW 52001, N'Feature not found.', 1;
+        IF @revision IS NULL OR @revision <> @current
+            THROW 52003, N'The feature was changed by someone else; read it again before saving.', 1;
+        IF EXISTS (SELECT 1 FROM sm.feature WHERE namekey = UPPER(@name) AND id <> @id)
+            THROW 52004, N'Another feature already has this name.', 1;
+
+        UPDATE sm.feature
+        SET name = @name, description = @description, builtonprocess = @builtonprocess,
+            modifiedby = ORIGINAL_LOGIN(), modified = @now
+        WHERE id = @id;
+
+        DELETE FROM sm.featurerow WHERE featureid = @id;
+        DELETE FROM sm.featureparam WHERE featureid = @id;   -- cascades to featureparamvalue
+        DELETE FROM sm.featurestep WHERE featureid = @id;
+    END
+
+    INSERT INTO sm.featurerow (featureid, seq, tablekind, layer, name, value, settingtype, listvalue, op, after, note)
+    SELECT @id, CONVERT(int, r.[key]) + 1, x.tablekind, ISNULL(x.layer, N'base'), x.name, x.value,
+           ISNULL(x.settingtype, N'Setting'), x.listvalue, ISNULL(x.op, N'set'), x.after, x.note
+    FROM OPENJSON(@json, '$.rows') AS r
+    CROSS APPLY OPENJSON(r.value) WITH (
+        tablekind   nvarchar(max)  '$.table',
+        layer       nvarchar(max)  '$.layer',
+        name        nvarchar(max)  '$.name',
+        value       nvarchar(max)  '$.value',
+        settingtype nvarchar(max)   '$.settingtype',
+        listvalue   nvarchar(max) '$.listvalue',
+        op          nvarchar(max)   '$.op',
+        after       nvarchar(max)  '$.after',
+        note        nvarchar(max) '$.note') AS x;
+
+    INSERT INTO sm.featureparam (featureid, name, seq, description, type, defaultvalue)
+    SELECT @id, x.name, CONVERT(int, p.[key]) + 1, ISNULL(x.description, N''), x.type, x.defaultvalue
+    FROM OPENJSON(@json, '$.params') AS p
+    CROSS APPLY OPENJSON(p.value) WITH (
+        name         nvarchar(max)   '$.name',
+        description  nvarchar(max) '$.description',
+        type         nvarchar(max)   '$.type',
+        defaultvalue nvarchar(max)  '$.default') AS x;
+
+    INSERT INTO sm.featureparamvalue (featureid, paramname, seq, value, description)
+    SELECT @id, x.name, CONVERT(int, v.[key]) + 1, y.value, ISNULL(y.description, N'')
+    FROM OPENJSON(@json, '$.params') AS p
+    CROSS APPLY OPENJSON(p.value) WITH (
+        name   nvarchar(max)  '$.name',
+        [values] nvarchar(max) '$.values' AS JSON) AS x
+    CROSS APPLY OPENJSON(x.[values]) AS v
+    CROSS APPLY OPENJSON(v.value) WITH (
+        value       nvarchar(max)  '$.value',
+        description nvarchar(max) '$.description') AS y;
+
+    INSERT INTO sm.featurestep (featureid, seq, text, sql)
+    SELECT @id, CONVERT(int, s.[key]) + 1, ISNULL(x.text, N''), x.sql
+    FROM OPENJSON(@json, '$.steps') AS s
+    CROSS APPLY OPENJSON(s.value) WITH (
+        text nvarchar(max) '$.text',
+        sql  nvarchar(max) '$.sql') AS x;
+
+
+    SELECT id, CONVERT(bigint, revision) AS revision FROM sm.feature WHERE id = @id;
+
+    COMMIT TRANSACTION;
+END

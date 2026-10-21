@@ -41,7 +41,7 @@ public sealed class SmException : Exception
             return true;
         }
 
-        if (exception.Number is >= 51000 and <= 51999)
+        if (exception.Number is (>= 51000 and <= 51999) or (>= 52000 and <= 52999))
         {
             translated = new SmException(SmErrorCodes.FromSqlErrorNumber(exception.Number), exception.Message, exception);
             return true;

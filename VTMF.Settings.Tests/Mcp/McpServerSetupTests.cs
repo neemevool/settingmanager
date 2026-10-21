@@ -15,6 +15,35 @@ public sealed class McpServerSetupTests
         "apply_plan", "rollback_plan", "rollback_session", "compare_clients", "clone_plan", "legacy_env_migration_plan",
     ];
 
+    private static readonly string[] FeatureToolNames =
+    [
+        "feature_module_status", "install_feature_module", "find_features", "get_feature", "save_feature",
+        "set_feature_status", "delete_feature", "feature_plan", "list_applied_features",
+    ];
+
+    [Fact]
+    public void AddSettingsMcpServer_RegistersFeatureTools()
+    {
+        var services = new ServiceCollection();
+        services.AddSettingsMcpServer();
+        using var provider = services.BuildServiceProvider();
+
+        var registered = provider.GetServices<McpServerTool>().Select(t => t.ProtocolTool.Name).ToList();
+        var declared = typeof(SettingsFeatureTools).GetMethods()
+            .Select(m => m.GetCustomAttribute<McpServerToolAttribute>())
+            .OfType<McpServerToolAttribute>()
+            .Select(a => a.Name!)
+            .ToList();
+
+        Assert.Equal(FeatureToolNames.Order(StringComparer.Ordinal), declared.Order(StringComparer.Ordinal));
+        foreach (var name in FeatureToolNames)
+        {
+            Assert.Contains(name, registered);
+        }
+
+        Assert.Contains("install_feature_module", McpServerSetup.Instructions, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void AddSettingsMcpServer_SetsInstructions()
     {

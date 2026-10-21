@@ -1,0 +1,32 @@
+-- Sets a feature's status (Draft | Finished). Needs the current @revision. Returns id, revision.
+CREATE OR ALTER PROCEDURE sm.SetFeatureStatus
+    @id       int,
+    @status   nvarchar(10),
+    @revision bigint
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+
+    IF @status IS NULL OR @status NOT IN (N'Draft', N'Finished')
+        THROW 52002, N'Status must be Draft or Finished.', 1;
+
+    BEGIN TRANSACTION;
+
+    DECLARE @current bigint;
+    SELECT @current = CONVERT(bigint, revision) FROM sm.feature WITH (UPDLOCK, HOLDLOCK) WHERE id = @id;
+
+    IF @current IS NULL
+        THROW 52001, N'Feature not found.', 1;
+    IF @revision IS NULL OR @revision <> @current
+        THROW 52003, N'The feature was changed by someone else; read it again before changing its status.', 1;
+
+    UPDATE sm.feature
+    SET status = @status, modifiedby = ORIGINAL_LOGIN(), modified = SYSUTCDATETIME()
+    WHERE id = @id;
+
+
+    SELECT id, CONVERT(bigint, revision) AS revision FROM sm.feature WHERE id = @id;
+
+    COMMIT TRANSACTION;
+END

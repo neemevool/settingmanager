@@ -10,20 +10,25 @@ public sealed record SmScript(string Name, string Text);
 /// <summary>The versioned set of sm module scripts plus the manifest recorded next to them.</summary>
 public sealed class SmScriptSet
 {
-    public const string ModuleName = "settingsmanagement";
+    public const string ClientModule = "settingsmanagement";
+
+    public const string MetabaseModule = "settingsmetabase";
 
     private const string ManifestFileName = "module.json";
 
     private static readonly JsonSerializerOptions ManifestOptions = new() { PropertyNameCaseInsensitive = true };
 
-    private SmScriptSet(int version, string recordedSha256, IReadOnlyList<SmScript> scripts)
+    private SmScriptSet(string moduleName, int version, string recordedSha256, IReadOnlyList<SmScript> scripts)
     {
+        ModuleName = moduleName;
         Version = version;
         RecordedSha256 = recordedSha256;
         Scripts = scripts;
     }
 
-    public static string DefaultDirectory => Path.Combine(AppContext.BaseDirectory, "Sql", ModuleName);
+    public static string DefaultDirectory => Path.Combine(AppContext.BaseDirectory, "Sql", ClientModule);
+
+    public string ModuleName { get; }
 
     public int Version { get; }
 
@@ -31,9 +36,11 @@ public sealed class SmScriptSet
 
     public IReadOnlyList<SmScript> Scripts { get; }
 
-    public static SmScriptSet LoadDefault() => Load(DefaultDirectory);
+    public static SmScriptSet LoadDefault() => Load(DefaultDirectory, ClientModule);
 
-    public static SmScriptSet Load(string directory)
+    public static SmScriptSet LoadMetabase() => Load(Path.Combine(AppContext.BaseDirectory, "Sql", MetabaseModule), MetabaseModule);
+
+    public static SmScriptSet Load(string directory, string moduleName)
     {
         if (!Directory.Exists(directory))
         {
@@ -54,7 +61,7 @@ public sealed class SmScriptSet
             .OrderBy(s => s.Name, StringComparer.Ordinal)
             .ToList();
 
-        return new SmScriptSet(manifest.Version, manifest.Sha256 ?? string.Empty, scripts);
+        return new SmScriptSet(moduleName, manifest.Version, manifest.Sha256 ?? string.Empty, scripts);
     }
 
     public string ComputeSha256()

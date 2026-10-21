@@ -1,6 +1,6 @@
 ---
 name: sm-module
-description: Use before working with a VTMF client's settings through the vtmf-settings MCP tools, or when a tool returns module_not_installed, module_outdated or module_newer_than_tool.
+description: Use before working with a VTMF client's settings through the vtmf-settings MCP tools, or when a tool returns module_not_installed, module_outdated, module_newer_than_tool, feature_module_not_installed, feature_module_outdated, feature_module_newer_than_tool or metabase_not_configured.
 ---
 
 # sm module check and install
@@ -17,4 +17,15 @@ The `sm` module (stored procedures) must be installed in a client's database, at
 8. `unknown_client`: call `list_clients` and use an exact client name.
 9. If any later tool returns `module_not_installed`, `module_outdated` or `module_newer_than_tool`, go back to step 2.
 
-Then continue with the manage-settings skill for the user's actual task.
+## Feature module (shared metadata database)
+
+The feature tools (`find_features`, `get_feature`, `save_feature`, `set_feature_status`, `delete_feature`, `feature_plan`, `list_applied_features`) also need the feature module in the shared metadata database (`DefaultMetaBase`). It is versioned separately from the client `sm` module. `feature_module_status()` reports the same states as `module_status`.
+
+| Code / state | What to do |
+|---|---|
+| `feature_module_not_installed` / `feature_module_outdated` (state `not_installed` / `outdated`) | Call `install_feature_module()`. Report `previousState` / `previousVersion` -> `installedVersion`, then continue. |
+| `feature_module_newer_than_tool` (state `newer_than_tool`) | Stop. The metabase module is newer than this MCP server; tell the user to update the MCP server image (same commands as step 5). |
+| `metabase_not_configured` | Stop. The MCP server has no `DefaultMetaBase` connection. Tell the user to add a connection block with `CLIENTNAME=DefaultMetaBase` (server, user, password) to `settings.env` and restart the MCP container. |
+| `install_failed` | As step 6. |
+
+Then continue with the manage-settings skill (or `create-feature` / `apply-feature`) for the user's actual task.

@@ -1,0 +1,22 @@
+-- Lists features. @status NULL = all statuses; @text matches name, description, builtonprocess or any row name.
+CREATE OR ALTER PROCEDURE sm.FindFeatures
+    @text   nvarchar(200) = NULL,
+    @status nvarchar(10)  = N'Finished'
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    SELECT f.id, f.name, f.description, f.status, f.builtonprocess,
+           ISNULL((SELECT STRING_AGG(k.tablekind, N', ') WITHIN GROUP (ORDER BY k.tablekind)
+                   FROM (SELECT DISTINCT r.tablekind FROM sm.featurerow AS r WHERE r.featureid = f.id) AS k), N'') AS tablekinds,
+           (SELECT COUNT(*) FROM sm.featureparam AS p WHERE p.featureid = f.id) AS paramcount,
+           f.modified
+    FROM sm.feature AS f
+    WHERE (@status IS NULL OR f.status = @status)
+      AND (@text IS NULL OR @text = N''
+           OR f.name LIKE N'%' + @text + N'%'
+           OR f.description LIKE N'%' + @text + N'%'
+           OR f.builtonprocess LIKE N'%' + @text + N'%'
+           OR EXISTS (SELECT 1 FROM sm.featurerow AS r WHERE r.featureid = f.id AND r.name LIKE N'%' + @text + N'%'))
+    ORDER BY f.name;
+END

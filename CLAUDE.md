@@ -20,4 +20,6 @@
 
 Any change under `VTMF.Settings.Core/Sql/settingsmanagement/` requires bumping `version` in `module.json` and updating `sha256` (both, on every script change; the failing `RecordedHash_MatchesScripts` test shows the new hash as the **Expected** value, split into two 32-char halves to defeat xunit truncation; concatenate them). Scripts must stay idempotent; no top-level `BEGIN TRAN` in scripts (procedure bodies may use transactions).
 
+The same rule applies to the feature (metabase) module: any change under `VTMF.Settings.Core/Sql/settingsmetabase/` requires bumping `version` in its own `module.json` and updating its `sha256` (the failing `RecordedHash_MatchesScripts*` test for that module shows the new hash the same way). Same idempotency and no-top-level-`BEGIN TRAN` rules.
+
 When the skills under `plugins/vtmf-settings/` change, bump `version` in `plugins/vtmf-settings/.claude-plugin/plugin.json` (installed copies are pinned to it).

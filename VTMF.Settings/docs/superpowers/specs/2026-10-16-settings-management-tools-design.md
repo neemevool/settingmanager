@@ -201,7 +201,7 @@ The plan tables are the audit trail and backup for engine changes (replacing `bc
   - `CompareClients(source, target, process, scope)` → diff without storing.
   - `ClonePlan(source, target, process, scope)` → read source via `sm.GetSettings`, build replace-mode desired state,
     `CreatePlan` on target with `source=clone:{source}`.
-  - Phase 3: `FeaturePlan`, `HarvestDraft`.
+  - Phase 3: `FeaturePlan` (see the phase 3 design).
 - `SmModuleStatus(client)` → installed / version / missing.
 
 ## 7. MCP server
@@ -215,7 +215,7 @@ The plan tables are the audit trail and backup for engine changes (replacing `bc
     `get_effective_settings`, `settings_usage`, `legacy_env_rows`, `list_plans`, `get_plan`.
   - Plan: `create_plan`, `clone_plan`, `compare_clients`, `rollback_plan`, `legacy_env_migration_plan`.
   - Apply: `apply_plan(client, planId, checksum)` — the only mutating tool.
-  - Phase 3: `find_features`, `get_feature`, `feature_plan`, `harvest_draft`, `save_feature`.
+  - Phase 3: see the phase 3 design §6.
 - Tool descriptions state the rules: show the plan before applying; no worker-layer rows; SPA reload needed after
   apply; `ServerSetting` values are never available.
 - Missing module on a client → `module_not_installed` error; never fall back to direct SQL.
@@ -223,31 +223,19 @@ The plan tables are the audit trail and backup for engine changes (replacing `bc
 
 ## 8. Features (phase 3)
 
-Metabase DDL brought under version control in `database5/settingsmanagement/metabase/`.
-
-- `sm.feature`: `id`, `name` (unique per version), `version`, `processtypename`, `description`, `tags`, `source`
-  (`harvest:{client}/{process}` | `manual`), `createdby`, `created`.
-- `sm.featurerow`: `featureid`, `seq`, `table`, `layer` (may be parameterized, e.g. `env:{{env}}`), `name`, `value`,
-  `settingtype`, `listvalue`, `op`, `after`, `note`. Placeholders `{{param}}` allowed in `name`, `value`, `after`,
-  `layer`.
-- `sm.featureparam`: `featureid`, `name`, `description`, `default`, `valuelist`.
-- `sm.featureset`, `sm.featuresetitem`: ordered features with parameter bindings (replaces `settingsfeaturegroup`).
-- Procedures: `sm.FindFeatures @text, @process, @tags`, `sm.GetFeature`, `sm.SaveFeature @json` (always a new
-  version), `sm.GetFeatureSet`.
-- Migration script from `settingsfeature*`; non-mappable feature types reported for manual conversion; old tables
-  left read-only until phase 4 completes.
-- Install: `SmOrchestrator.FeaturePlan(client, feature|set, process, params)` → resolve params (missing → error),
-  expand, `sm.CreatePlan` merge mode, `source=feature:{name}@{version}`.
-- Harvest: `SmOrchestrator.HarvestDraft(client, process, baselineClient|none, namePrefixes)` → diff against baseline
-  client or code defaults (`sm.GetSettingsUsage`); candidate rows grouped by prefix; saved via `SaveFeature` after
-  selection, description and parameter marking.
+Superseded by `2026-10-20-settings-management-phase3-features-design.md`: feature store in the metabase
+(`DefaultMetaBase`, schema `sm`), unversioned features with typed `{{placeholder}}` parameters and post-apply
+guidance steps, `create-feature` / `apply-feature` skills. Feature sets are phase 3.1; migration of the old
+`settingsfeature*` tables is phase 4.
 
 ## 9. Phase 4 — VTMF.Settings UI
 
 - Settings Manager / Copy / Backup pages move to `SmClient`: edits become plans with preview; copy = clone + diff.
 - Layer selector (base / env / lang).
 - Plans page (history, details, rollback).
-- Feature pages on the new metabase model.
+- Feature pages on the new metabase model (phase 3 `sm.feature`).
+- Migrate `settingsfeature*` / `settingsfeaturegroup` to the phase 3 model (feature groups → phase 3.1 feature
+  sets); non-mappable feature types reported for manual conversion. Retire the old tables once no page uses them.
 - Remove direct-SQL paths as each page migrates.
 
 ## 10. Testing
@@ -267,8 +255,9 @@ Metabase DDL brought under version control in `database5/settingsmanagement/meta
 |---|---|
 | 1 | Core extraction (with build requirements §3.1); `sm` module skeleton + read procedures + catalogue; `SmClient`; MCP server with read tools; Compose service; tests |
 | 2 | Plan engine tables and procedures; `SmOrchestrator` clone/compare; MCP plan/apply tools; tests |
-| 3 | Metabase DDL under VCS; feature model and procedures; migration; feature plan and harvest; MCP feature tools |
-| 4 | UI migration to `SmClient`; layers; Plans page; feature pages; removal of direct SQL |
+| 3 | Metabase feature module; feature model and procedures; feature plan; MCP feature tools; `create-feature` / `apply-feature` skills (phase 3 design) |
+| 3.1 | Feature sets (separate design) |
+| 4 | UI migration to `SmClient`; layers; Plans page; feature pages on the new model; migration of `settingsfeature*`; removal of direct SQL |
 
 Each phase gets its own implementation plan.
 

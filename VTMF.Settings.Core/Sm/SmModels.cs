@@ -227,6 +227,16 @@ public sealed class SmPlanResult
     public required IReadOnlyList<SmPlanWarning> Warnings { get; init; }
 }
 
+public sealed class SmAppliedFeature
+{
+    public int FeatureId { get; set; }
+    public string FeatureName { get; set; } = string.Empty;
+    public string Process { get; set; } = string.Empty;
+    public int PlanId { get; set; }
+    public DateTime AppliedAt { get; set; }
+    public string AppliedBy { get; set; } = string.Empty;
+}
+
 public sealed class SmPlan
 {
     public int Id { get; set; }

@@ -143,8 +143,19 @@ Tools for changing settings (see [6. Changing settings with Claude](#6-changing-
 
 Only `apply_plan` changes settings. Everything else reads or prepares.
 
-Skills: `sm-module` (checks and installs the `sm` module) and `manage-settings` (guides Claude when you
-want to change settings).
+Tools for features (see [7. Creating a feature](#7-creating-a-feature) and
+[8. Applying a feature](#8-applying-a-feature)). Features are stored in the shared metadata database
+(`DefaultMetaBase` in `settings.env`), so every client can use them:
+
+| Group | Tools |
+|---|---|
+| Feature module (metadata database) | `feature_module_status`, `install_feature_module` |
+| Feature catalog | `find_features`, `get_feature`, `save_feature`, `set_feature_status`, `delete_feature` |
+| Applying | `feature_plan` (preview only; apply with `apply_plan`), `list_applied_features` |
+
+Skills: `sm-module` (checks and installs the `sm` module and the feature module), `manage-settings`
+(guides Claude when you want to change settings), `create-feature` (records reusable features) and
+`apply-feature` (applies a feature to a customer process).
 
 ### Updating
 
@@ -155,15 +166,23 @@ Two parts must be updated together: the MCP image and the plugin.
 
 Check the versions:
 
-- `/plugin` shows the plugin version (currently 1.1.1).
-- `module_status` shows the `sm` module version in a client database (currently 5). Ask
+- `/plugin` shows the plugin version (currently 1.2.0).
+- `module_status` shows the `sm` module version in a client database (currently 6). Ask
   `Is the sm module up to date for prod-client1?`
+- `feature_module_status` shows the feature module version in the metadata database (currently 1). Ask
+  `Is the feature module up to date?`
+
+Features need an MCP image with client module 6 and feature (metabase) module 1. After updating the image,
+the `sm-module` skill installs both the next time you work with a client or a feature.
 
 If `module_status` reports:
 
 - `module_outdated`: nothing to do by hand. The `sm-module` skill installs the new module the next time you
   work with that client (Claude Code asks permission first).
 - `module_newer_than_tool`: the database is ahead of the MCP image. Update the image (step 1).
+
+The feature module reports the same way (`feature_module_outdated`, `feature_module_newer_than_tool`).
+`metabase_not_configured` means `settings.env` has no `DefaultMetaBase` block (step 2).
 
 ## 5. Sample prompts
 
@@ -181,6 +200,10 @@ If `module_status` reports:
 | `Undo the last change.` | `rollback_plan` for the latest change. |
 | `Undo everything I did in this session.` | `rollback_session`; reverts all changes of the session, newest first. |
 | `Show what I changed in this session.` | `session_changes`. |
+| `Make this session a feature.` | The `create-feature` skill: asks what the feature lets the end user do, proposes names, saves a draft (`save_feature`), then turns the session's changes into feature rows. |
+| `Show unfinished features.` | `find_features` with status `Draft`; lists the drafts by description. |
+| `Add the barcode button like on customer Y in sparelocateitems for prod-client1.` | The `apply-feature` skill: `list_applied_features` on Y first, asks which feature and its choices, previews with `feature_plan`, applies after "yes". |
+| `Could the article get a barcode if it has none?` | The `apply-feature` skill: asks a few questions, `find_features`, presents matching features by description. |
 
 How to check it works:
 
@@ -236,3 +259,93 @@ How it works:
 - **Settings UI.** Changes made by hand in the Settings UI are not part of sessions and cannot be undone
   with these commands.
 - After a change, reload the SPA to see it.
+
+## 7. Creating a feature
+
+A feature is a reusable piece of behaviour that settings switch on, e.g. "Allows adding a barcode to an article
+on the product card (sparelocateitems)". The code behind it must already exist. The feature records which
+settings make it work, which choices the consultant has when applying it, and what must be done by hand
+afterwards (e.g. a Directo hook in `dcquerysettings`).
+
+Build and test the behaviour first: change the settings with Claude as in section 6 (one session). When it
+works, say that it should be reusable, or start on your own ("make a feature from the barcode settings of
+customer Y").
+
+Sample conversation:
+
+> **You:** Make this session a feature.
+>
+> **Claude:** What does it let the end user do, and where?
+>
+> **You:** The barcode thing on the product card.
+>
+> **Claude:** Suggested description: "Allows adding a barcode to an article on the product card
+> (sparelocateitems)". Names: "Article barcode on product card", "Add barcode to article". Which one?
+>
+> **You:** The first.
+>
+> **Claude:** Saved as an unfinished feature. *(shows the session's changes as feature rows)* Which of these
+> belong to the feature, and which values differ per customer?
+>
+> **You:** All of them. The not-found action differs: ask the operator, or show an error.
+>
+> **Claude:** *(turns the value into a choice with two described options, saves)* Anything to do outside the
+> settings tables?
+>
+> **You:** A Directo hook in dcquerysettings.
+>
+> **Claude:** *(writes the step with SQL guarded by `IF NOT EXISTS`, saves)* Mark it finished?
+>
+> **You:** yes
+>
+> **Claude:** Finished. Consultants can now apply it.
+
+How it works:
+
+- **Description first.** Consultants find features by what they enable, so Claude insists on a short,
+  user-facing description and helps with the name.
+- **Saved at every step.** The feature is stored as a draft from the first step; `Show unfinished features`
+  lists drafts, `Show the current state` shows the feature.
+- **Only finished features can be applied.** Drafts are never applied; to try changes, change the settings
+  with Claude as in section 6.
+- **Choices.** Values that differ per customer become questions (`{{name}}` placeholders): text, number,
+  yes/no, or a list of described options. One answer fills every setting that uses it, also inside setting
+  names.
+- **No branching.** Anything that needs conditions goes into the manual steps or a separate feature.
+- **Manual steps** may contain SQL. Claude never runs it; the consultant does.
+
+## 8. Applying a feature
+
+Ask in the customer's words or point to a customer where it already works. You do not need to know feature
+names.
+
+Sample conversation:
+
+> **You:** Add the barcode button like on customer Y in sparelocateitems for prod-client1.
+>
+> **Claude:** On Y this feature is applied: "Allows adding a barcode to an article on the product card
+> (sparelocateitems)". Is this it?
+>
+> **You:** Yes.
+>
+> **Claude:** When the scanned barcode is not found: 1) ask the operator (default), 2) show an error?
+>
+> **You:** Ask the operator.
+>
+> **Claude:** What are you setting up? *(then shows the preview table; warns if the process code does not seem
+> to read a server setting the feature sets; mentions one manual step)* Apply this?
+>
+> **You:** yes
+>
+> **Claude:** Applied. Reload the SPA to see the change. Step 1: add the Directo hook. Run this SQL in
+> prod-client1: *(SQL)*. Tell me when it is done.
+
+How it works:
+
+- **Same safety as section 6.** Preview, apply only after "yes", `Undo that` reverts it.
+- **Choices** are asked in plain words; check the setting names in the preview, since answers can become part
+  of them.
+- **Re-applying** a fixed feature shows only the differences.
+- **Manual steps** are shown one by one with SQL prepared for the client. Claude never runs the SQL; you run it
+  (Settingmanager module install or your own SQL tool) and confirm.
+- `list_applied_features` shows which features a client has (`Which features are applied on prod-client1?`).

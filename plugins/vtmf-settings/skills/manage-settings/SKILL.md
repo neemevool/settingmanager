@@ -37,7 +37,7 @@ All tools return `{ ok, data, error: { code, message } }`. Reply in the user's l
    - Rollback works in closed sessions too.
 9. **Copy from another client.** Always `compare_clients(source, target, process, scope?)` first and show the differences (`DryRun` = differences in the same table format; `NoChanges` = already equal). Tables missing on the target appear as `CreateTable` items — ask before passing `createTable`. Then `start_session` **on the target**, `clone_plan(source, target, process, sessionId, scope?, options?)`, preview, confirm, `apply_plan` on the target.
     Legacy env rows (`legacy_env_rows`) move to overlay tables via `legacy_env_migration_plan(client, process, sessionId)` — same preview/confirm/apply; `LEGACY_CONFLICT` rows stay where they are, show them.
-10. **End of session.** When the user is done and the session has changes: show `session_changes` as a short summary, call `close_session`, and ask whether these changes form something reusable (a feature). Note the answer together with the session name and id in your reply (packaging comes later).
+10. **End of session.** When the user is done and the session has changes: show `session_changes` as a short summary, call `close_session`, and ask whether these changes form something reusable (a feature); if yes, continue with the `create-feature` skill, passing the client and session id.
 11. The **Hard rules** above apply at every step: no direct SQL, no `ServerSetting` values, no apply without confirmation.
 12. Answer in the user's language; never translate setting names or values.
 

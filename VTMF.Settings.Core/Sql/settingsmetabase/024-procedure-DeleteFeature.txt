@@ -1,0 +1,26 @@
+-- Deletes a Draft feature (children cascade). Needs the current @revision.
+CREATE OR ALTER PROCEDURE sm.DeleteFeature
+    @id       int,
+    @revision bigint
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+
+    BEGIN TRANSACTION;
+
+    DECLARE @current bigint, @status nvarchar(10);
+    SELECT @current = CONVERT(bigint, revision), @status = status
+    FROM sm.feature WITH (UPDLOCK, HOLDLOCK) WHERE id = @id;
+
+    IF @current IS NULL
+        THROW 52001, N'Feature not found.', 1;
+    IF @revision IS NULL OR @revision <> @current
+        THROW 52003, N'The feature was changed by someone else; read it again before deleting.', 1;
+    IF @status = N'Finished'
+        THROW 52005, N'Only draft features can be deleted; reopen it first.', 1;
+
+    DELETE FROM sm.feature WHERE id = @id;
+
+    COMMIT TRANSACTION;
+END

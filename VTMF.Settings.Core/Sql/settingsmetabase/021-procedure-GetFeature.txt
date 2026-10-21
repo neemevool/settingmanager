@@ -1,0 +1,32 @@
+-- Returns one feature by id or name as five result sets: header (with revision), rows, params, param values, steps.
+CREATE OR ALTER PROCEDURE sm.GetFeature
+    @id   int           = NULL,
+    @name nvarchar(100) = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF @id IS NULL AND @name IS NOT NULL
+        SELECT @id = id FROM sm.feature WHERE namekey = UPPER(@name);
+
+    IF @id IS NULL OR NOT EXISTS (SELECT 1 FROM sm.feature WHERE id = @id)
+        THROW 52001, N'Feature not found.', 1;
+
+    SELECT id, name, description, status, builtonprocess, CONVERT(bigint, revision) AS revision,
+           createdby, created, modifiedby, modified
+    FROM sm.feature WHERE id = @id;
+
+    SELECT tablekind AS [table], layer, name, value, settingtype, listvalue, op, after, note
+    FROM sm.featurerow WHERE featureid = @id ORDER BY seq;
+
+    SELECT name, description, type, defaultvalue AS [default]
+    FROM sm.featureparam WHERE featureid = @id ORDER BY seq;
+
+    SELECT v.paramname, v.value, v.description
+    FROM sm.featureparamvalue AS v
+    JOIN sm.featureparam AS p ON p.featureid = v.featureid AND p.name = v.paramname
+    WHERE v.featureid = @id
+    ORDER BY p.seq, v.seq;
+
+    SELECT text, sql FROM sm.featurestep WHERE featureid = @id ORDER BY seq;
+END

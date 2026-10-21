@@ -25,3 +25,35 @@ Spec: `docs/superpowers/specs/2026-10-17-settings-management-phase1-1-module-ins
 > Yes, reviewed the plan. Run subagent-driven
 
 Spec: `docs/superpowers/specs/2026-10-19-settings-management-phase2-plan-engine-design.md`; plan: `docs/superpowers/plans/2026-10-19-settings-management-phase2-plan-engine.md`.
+
+## 2026-10-20 — Settings management phase 3: features
+
+> We finished the work on phase 2 from 2026-10-16-settings-management-tools-design.md. The next is the features, phase 3. It is partially described. Please check first the work we did recently about the features. I remember we described the feature management and feature management skill
+
+> I create a new branch phase3-features. Lets brainstorm the phase3. In addition to what you listed: 1. Features should live in the metabase, because then these would be available to be used on any customer 2. The feature creation should be as agreed a separate skill. It should guide creation of a feature from the session but also the feature creation can be initiated separately. 3. The current settingfeatures will stay for now for the Settingmanager UI, but we will move these in the Phase 4 (update the phase 4 too)
+
+> Feature creation process: the feature is first implemented in code; then describe the feature without naming it (what it enables for the user, e.g. "Allows adding the barcode to the article on the product card (sparelocateitems)"), store it immediately in the metabase as not finished and keep unfinished features visible; name the settings to add/change/remove iteratively with described value options; manual steps / non-settings records as guidance; the apply skill interviews the consultant, asks option values, creates the plan and guides post-apply actions.
+
+> The feature becomes usable only when marked finished. (Example of records in another table: dcquerysettings / Directo hooks for the relocateitems button.)
+
+> No extra step for settings-like tables. It makes things very fragile. There should be just a guidance what to do as post-apply ... Claude Code could just generate the SQL and the consultant may apply it.
+
+> Consultants refer to a customer where the feature works ("add the similar button ... as it is on customer Y in process sparelocateitems"); customers ask "could it be possible to add the barcode to the article which yet does not have it".
+
+> Features apply to any similar table (spaorderassemblingDocumentLayout → spaincomeorderDocumentLayout); only ServerProcessSettings need support in the process code.
+
+> No versioning. If something was wrong or needs update, then the feature must be updated.
+
+> One choice can set several dependent settings (Function.Barcode.Notfound.Action OptionsQuestion / Function.OptionsQuestion.Notfound.ItemType Option / Function.Barcode.Notfound.OptionsQuestion.Procedure RowSelectionOptionsQuestion) — use placeholders; complex cases are described in free form, not formalized in code.
+
+> Values are often booleans (True/False as text), types are supported; placeholders like {{name}} can be used in setting names and values and are prompted from the consultant (e.g. DocumentLayout Column SettingGroup with {{name}}).
+
+> Lets have feature sets as separate stage
+
+> Testing drafts: (b). The author tests through manage-settings
+
+> Reviewed the design document, proceed
+
+> I reviewed the plan, run it subagent-driven
+
+Spec: `docs/superpowers/specs/2026-10-20-settings-management-phase3-features-design.md`; plan: `docs/superpowers/plans/2026-10-20-settings-management-phase3-features.md`.

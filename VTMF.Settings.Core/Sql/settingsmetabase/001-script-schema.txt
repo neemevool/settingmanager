@@ -1,0 +1,14 @@
+IF SCHEMA_ID(N'sm') IS NULL
+    EXEC (N'CREATE SCHEMA sm');
+GO
+
+IF OBJECT_ID(N'sm.moduleinfo', N'U') IS NULL
+BEGIN
+    CREATE TABLE sm.moduleinfo
+    (
+        module    nvarchar(50) NOT NULL CONSTRAINT PK_sm_moduleinfo PRIMARY KEY,
+        version   int          NOT NULL,
+        installed datetime2(0) NOT NULL CONSTRAINT DF_sm_moduleinfo_installed DEFAULT (SYSUTCDATETIME())
+    );
+END
+GO

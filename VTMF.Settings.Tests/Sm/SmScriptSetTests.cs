@@ -9,10 +9,35 @@ public sealed class SmScriptSetTests
     {
         var set = SmScriptSet.LoadDefault();
 
-        Assert.Equal(36, set.Scripts.Count);
+        Assert.Equal(37, set.Scripts.Count);
         Assert.Equal("001-script-schema.txt", set.Scripts[0].Name);
         Assert.DoesNotContain(set.Scripts, s => s.Name.StartsWith("999", StringComparison.Ordinal));
         Assert.True(set.Version >= 2);
+    }
+
+    [Fact]
+    public void LoadMetabase_ScriptsAreInOutputFolder()
+    {
+        var set = SmScriptSet.LoadMetabase();
+
+        Assert.Equal(7, set.Scripts.Count);
+        Assert.Equal("001-script-schema.txt", set.Scripts[0].Name);
+        Assert.Equal(SmScriptSet.MetabaseModule, set.ModuleName);
+        Assert.Equal(1, set.Version);
+    }
+
+    [Fact]
+    public void RecordedHash_MatchesScripts_Metabase()
+    {
+        var set = SmScriptSet.LoadMetabase();
+
+        Assert.Equal(Chunks(set.ComputeSha256()), Chunks(set.RecordedSha256));
+    }
+
+    [Fact]
+    public void Load_RecordsModuleName()
+    {
+        Assert.Equal("settingsmanagement", SmScriptSet.LoadDefault().ModuleName);
     }
 
     [Fact]
@@ -32,7 +57,7 @@ public sealed class SmScriptSetTests
         crlf.Write("001-a.txt", "A\r\nB\r\n");
         lf.Write("001-a.txt", "A\nB\n");
 
-        Assert.Equal(SmScriptSet.Load(crlf.Path).ComputeSha256(), SmScriptSet.Load(lf.Path).ComputeSha256());
+        Assert.Equal(SmScriptSet.Load(crlf.Path, SmScriptSet.ClientModule).ComputeSha256(), SmScriptSet.Load(lf.Path, SmScriptSet.ClientModule).ComputeSha256());
     }
 
     [Fact]
@@ -40,7 +65,7 @@ public sealed class SmScriptSetTests
     {
         var path = Path.Combine(Path.GetTempPath(), "sm-missing-" + Guid.NewGuid().ToString("N"));
 
-        var ex = Assert.Throws<InvalidOperationException>(() => SmScriptSet.Load(path));
+        var ex = Assert.Throws<InvalidOperationException>(() => SmScriptSet.Load(path, SmScriptSet.ClientModule));
 
         Assert.Contains(path, ex.Message, StringComparison.Ordinal);
     }
@@ -51,7 +76,7 @@ public sealed class SmScriptSetTests
         using var dir = new TempDir(writeManifest: false);
         dir.Write("001-a.txt", "A");
 
-        Assert.Throws<InvalidOperationException>(() => SmScriptSet.Load(dir.Path));
+        Assert.Throws<InvalidOperationException>(() => SmScriptSet.Load(dir.Path, SmScriptSet.ClientModule));
     }
 
     private static string[] Chunks(string value) => [.. value.Chunk(32).Select(c => new string(c))];
