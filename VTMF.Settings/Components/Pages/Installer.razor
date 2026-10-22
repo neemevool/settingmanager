@@ -178,7 +178,7 @@ else
         if (!isInitialized)
         {
             var loggerFactory = new VTMF.Settings.Services.ListLoggerFactory(installLog);
-        
+
             databaseService = new VTMF.SQLInstaller.Services.DatabaseService(
                 installConfig.ConnectionString,
                 loggerFactory.CreateLogger<VTMF.SQLInstaller.Services.DatabaseService>(),
@@ -192,7 +192,7 @@ else
                 loggerFactory.CreateLogger<VTMF.SQLInstaller.Installers.DatabaseInstaller>());
             isInitialized = true;
         }    
-        
+
     }
 
     private async Task Install(InstallItem installItem, bool validate)
@@ -204,6 +204,22 @@ else
         ArgumentNullException.ThrowIfNull(sqlParser);
         ArgumentNullException.ThrowIfNull(installer);
 
+        try
+        {
+            var canConnect = await installer.CanConnect();
+            var databaseExists = await installer.DatabaseIsCreated();
+            if (!canConnect || !databaseExists)
+            {
+                ToastService.ShowError("Cannot connect to the database. Please check the connection string.");
+                return;
+            };           
+        } catch (Exception ex)
+        {
+            ToastService.ShowError($"Failed to connect to database: {ex.Message}");
+            return;
+        }
+
+    
         itemResults.Clear();
         installLog.Clear();
 
