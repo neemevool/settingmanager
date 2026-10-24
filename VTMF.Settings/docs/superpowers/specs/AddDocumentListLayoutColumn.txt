@@ -1,0 +1,98 @@
+ALTER procedure [dbo].[AddDocumentListLayoutColumn]
+    @tablename nvarchar(100),
+	@columnname nvarchar(100),
+	@aftercolumn nvarchar(100),
+    @caption nvarchar(100),
+    @visible bit = 1,
+    @readonly bit = 1,
+    @columntype nvarchar(100) = 'string?',
+    @width nvarchar(100) = null
+as
+begin
+	set nocount on;
+    DECLARE @MaxOrderNr INT
+    DECLARE @ordersql NVARCHAR(1000) = 
+    N'SELECT @p_Result = max(ordernr) FROM ' + QUOTENAME(@tablename) + N' WHERE [NAME] like ''Column.''+@p_ColumnName+''.%'''
+
+   
+    EXEC sp_executesql @ordersql,
+        N'@p_ColumnName NVARCHAR(50), @p_Result INT OUTPUT',
+            @p_ColumnName = @aftercolumn,
+            @p_Result = @MaxOrderNr OUTPUT
+    
+    --select @MaxOrderNr
+    --return
+
+    DECLARE @movesql nvarchar(1000) = 
+        N'UPDATE ' + QUOTENAME(@tablename) + ' set [ordernr]=[ordernr] + @p_Move where [ordernr]>@p_Ordernr' 
+    EXEC sp_executesql @movesql,
+        N'@p_Move int, @p_Ordernr int',
+        @p_Move = 7,
+        @p_Ordernr = @MaxOrderNr 
+
+    DECLARE @settingsql NVARCHAR(1000) = 
+        N'INSERT INTO ' + QUOTENAME(@tablename) + 
+        N' (NAME, VALUE, settingtype, workercode, ordernr) VALUES (@p_Name, @p_Value, @p_SettingType, ''ALL'', @p_OrderNr)'
+
+    DECLARE @ordernr int = @MaxOrderNr 
+
+    EXEC sp_executesql @settingsql,
+        N'@p_Name NVARCHAR(400), @p_Value NVARCHAR(1600), @p_SettingType NVARCHAR(50), @p_OrderNr INT',
+        @p_Name = 'Column',
+        @p_Value = @columnname,
+        @p_SettingType = 'SettingGroup',
+        @p_OrderNr = @ordernr
+
+    DECLARE @settingname nvarchar(400)
+    DECLARE @settingvalue nvarchar(1600)
+    
+    set @settingname = 'Column.'+@columnname+'.Caption'
+    set @settingvalue = @caption
+    set @ordernr = @ordernr + 1
+    EXEC sp_executesql @settingsql,
+        N'@p_Name NVARCHAR(400), @p_Value NVARCHAR(1600), @p_SettingType NVARCHAR(50), @p_OrderNr INT',
+        @p_Name = @settingname,
+        @p_Value = @settingvalue,
+        @p_SettingType = 'Setting',
+        @p_OrderNr = @ordernr
+
+    set @settingname = 'Column.'+@columnname+'.Type'
+    set @settingvalue = @columntype
+    set @ordernr = @ordernr + 1
+    EXEC sp_executesql @settingsql,
+        N'@p_Name NVARCHAR(400), @p_Value NVARCHAR(1600), @p_SettingType NVARCHAR(50), @p_OrderNr INT',
+        @p_Name = @settingname,
+        @p_Value = @settingvalue,
+        @p_SettingType = 'Setting',
+        @p_OrderNr = @ordernr
+
+    set @settingname = 'Column.'+@columnname+'.Visible'
+    set @settingvalue = case @visible when 1 then 'True' else 'False' end
+    set @ordernr = @ordernr + 1
+    EXEC sp_executesql @settingsql,
+        N'@p_Name NVARCHAR(400), @p_Value NVARCHAR(1600), @p_SettingType NVARCHAR(50), @p_OrderNr INT',
+        @p_Name = @settingname,
+        @p_Value = @settingvalue,
+        @p_SettingType = 'Setting',
+        @p_OrderNr = @ordernr
+
+    set @settingname = 'Column.'+@columnname+'.ReadOnly'
+    set @settingvalue = case @readonly when 1 then 'True' else 'False' end
+    set @ordernr = @ordernr + 1
+    EXEC sp_executesql @settingsql,
+        N'@p_Name NVARCHAR(400), @p_Value NVARCHAR(1600), @p_SettingType NVARCHAR(50), @p_OrderNr INT',
+        @p_Name = @settingname,
+        @p_Value = @settingvalue,
+        @p_SettingType = 'Setting',
+        @p_OrderNr = @ordernr
+
+    set @settingname = 'Column.'+@columnname+'.Width'
+    set @settingvalue = coalesce(@width,'')
+    set @ordernr = @ordernr + 1
+    EXEC sp_executesql @settingsql,
+        N'@p_Name NVARCHAR(400), @p_Value NVARCHAR(1600), @p_SettingType NVARCHAR(50), @p_OrderNr INT',
+        @p_Name = @settingname,
+        @p_Value = @settingvalue,
+        @p_SettingType = 'Setting',
+        @p_OrderNr = @ordernr
+end
