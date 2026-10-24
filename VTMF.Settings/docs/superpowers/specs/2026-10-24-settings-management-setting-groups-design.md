@@ -1,6 +1,6 @@
 # Settings management — SettingGroup blocks in the plan engine
 
-**Date:** 2026-10-24 · **Status:** For review
+**Date:** 2026-10-24 · **Status:** Approved
 **Builds on:** `2026-10-19-settings-management-phase2-plan-engine-design.md` (plan engine, `sm.PlanOrder`),
 `2026-10-20-settings-management-phase3-features-design.md` (features, `create-feature` / `apply-feature`).
 **Prior art:** `AddDocumentListLayoutColumn.txt` (a customer procedure that adds a layout column after a named column;

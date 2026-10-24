@@ -121,7 +121,14 @@ the `sm` module (stored procedures) in a client database before Claude works wit
    /plugin marketplace update vtmf
    /reload-plugins
    ```
+
+  Close the session or reconnect the mcp server:
+  ```
+  /mcp
+  ```
+  Then choose plugin:`vtmf-settings:vtmf-settings`, then Reconnect;
    
+
 5. Check the connection with `/mcp`: `vtmf-settings` should be listed as connected.
 
 If the MCP server is not at `http://localhost:8081/mcp`, set `VTMF_SETTINGS_MCP_URL` before starting Claude Code.
