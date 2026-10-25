@@ -22,6 +22,14 @@ public sealed class SmFeaturePlanner(SmClient sm, SmFeatureStore features)
                 $"Feature '{feature.Name}' is a draft; only finished features can be applied.");
         }
 
+        // Features finished before the position rule existed: refuse rather than place a new group at an arbitrary spot.
+        if (SmFeatureValidator.PositionErrors(feature).Count > 0)
+        {
+            throw new SmException(
+                SmErrorCodes.FeatureNeedsPosition,
+                $"Feature '{feature.Name}' adds a group without asking where it goes; reopen it with create-feature and add the position question.");
+        }
+
         var expansion = SmFeatureExpander.Expand(feature, process, client, parameters);
         var plan = await sm.CreatePlanAsync(
             client, expansion.Desired, $"Feature {feature.Name}", sessionId, options,

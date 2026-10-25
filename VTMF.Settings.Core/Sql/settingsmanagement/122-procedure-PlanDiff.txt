@@ -2,8 +2,18 @@
 -- #warnings, matching rows on idkey, places new rows (sm.PlanOrder), then numbers the items.
 --   upsert: Insert if the identity is absent; Update if VALUE, settingtype, LISTVALUE (case-sensitive) or a given
 --           ordernr differs; nothing if equal. New rows without ordernr get ordernr 0 in ServerProcessSettings,
---           elsewhere they are placed by sm.PlanOrder (anchor / name prefix / end, renumbering if needed).
---   remove (merge): Delete if present, else warning ROW_NOT_FOUND.
+--           elsewhere they are placed by sm.PlanOrder (block-aware: anchor / family / name prefix / end,
+--           renumbering if needed). SettingGroup rows (merge): an explicit ordernr is refused, new or existing
+--           (GROUP_ORDERNR, 51020); on an existing one an after is ignored with warning GROUP_NOT_MOVED.
+--   remove (merge): Delete if present, else warning ROW_NOT_FOUND. On a SettingGroup row (the matched current row
+--           decides, so a name-keyed group removed without settingtype counts): also a Delete for every
+--           other row of its block in its table and, when removed from a base or env table, for every row under
+--           its group path in the view's lang tables (scope added by sm.PlanResolve), unless the group still exists
+--           after the plan in another base/env table of the view. Refused when the group or a row it removes is
+--           also upserted or moved (GROUP_REMOVE_CONFLICT, 51021), when it would delete a ServerSetting row
+--           (SERVERSETTING) or a row with duplicates (DUPLICATE_ROW).
+--   move (merge, SettingGroup rows): no item here; the group row must exist (else Error GROUP_NOT_FOUND, 51019).
+--           sm.PlanOrder moves the block and gives its rows ordernr Updates (or sets ordernr on their Update item).
 --   replace: additionally Delete every current row of a replace scope whose identity is not desired
 --            (ServerSetting rows are never deleted).
 --   seq: CreateTable items first, then per physical table Delete, Update, Insert by resulting ordernr.
@@ -12,6 +22,30 @@ CREATE OR ALTER PROCEDURE sm.PlanDiff
 AS
 BEGIN
     SET NOCOUNT ON;
+
+    -- Input/output of sm.GroupBlocks (the SettingGroup block rule), filled anew by each user: the group removes and
+    -- SPLIT_GROUP below and sm.PlanOrder. The columns after blockkey belong to the callers.
+    CREATE TABLE #groupblocks
+    (
+        id            int IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        part          nvarchar(400)  COLLATE DATABASE_DEFAULT NOT NULL,
+        name          nvarchar(200)  COLLATE DATABASE_DEFAULT NOT NULL,
+        value         nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+        settingtype   nvarchar(20)   COLLATE DATABASE_DEFAULT NOT NULL,
+        canhead       bit            NOT NULL,
+        path          nvarchar(1000) COLLATE DATABASE_DEFAULT NULL,
+        family        nvarchar(1000) COLLATE DATABASE_DEFAULT NULL,
+        ishead        bit            NULL,
+        blockkey      nvarchar(1000) COLLATE DATABASE_DEFAULT NULL,
+        ref           int            NULL,
+        physicaltable sysname        COLLATE DATABASE_DEFAULT NULL,
+        workercode    nvarchar(100)  COLLATE DATABASE_DEFAULT NULL,
+        [table]       nvarchar(100)  COLLATE DATABASE_DEFAULT NULL,
+        idkey         nvarchar(1000) COLLATE DATABASE_DEFAULT NULL,
+        rowno         int            NULL,
+        ordernr       int            NULL,
+        INDEX ix_groupblocks_part NONCLUSTERED (part)
+    );
 
     INSERT INTO #items (action, physicaltable, [table], layer, workercode, name, value, settingtype, listvalue, ordernr,
                         oldvalue, oldsettingtype, oldlistvalue, oldordernr)
@@ -49,6 +83,222 @@ BEGIN
       AND NOT EXISTS (SELECT 1 FROM #current AS c WHERE c.idkey = d.idkey)
     ORDER BY d.rowno;
 
+    -- Group removes (merge; replace refuses op remove). Path and block rule: sm.GroupPath / sm.GroupBlocks, as in
+    -- sm.PlanOrder (block = the group row plus the rows whose longest enclosing group path is its path).
+    -- Whether a remove is a group remove is decided by the matched CURRENT row (settingtype SettingGroup): a
+    -- name-keyed group matches by NAME alone, so a desired row without settingtype removes the whole group too.
+    --   #grem: one row per remove of a SettingGroup row (desired settingtype SettingGroup, or the matched current
+    --          row is one). ishead = the current row is a block head in its table (a group row under the path of a
+    --          group with another NAME is a child of that block, removed alone like any child).
+    --   #groupblocks: one part per table a group is removed from: its current rows (canhead 1) and, tested against
+    --          its groups (canhead 0), the current rows of the view's lang tables in #scope (base/env removes) and
+    --          the desired upsert/move rows of the table and of those lang tables (rowno set).
+    --   keepslang = the group still exists after the plan in another base/env table of the view: an in-scope table
+    --          (current row not removed by this plan, or a desired upsert of it), or a table of the view outside the
+    --          scope (which the plan cannot change; checked with dynamic SQL).
+    IF EXISTS (SELECT 1 FROM #desired AS d
+               WHERE d.op = N'remove'
+                 AND (d.settingtype = N'SettingGroup'
+                      OR EXISTS (SELECT 1 FROM #current AS c WHERE c.idkey = d.idkey AND c.settingtype = N'SettingGroup')))
+    BEGIN
+        CREATE TABLE #grem
+        (
+            id            int IDENTITY(1,1) NOT NULL PRIMARY KEY,
+            rowno         int            NOT NULL,
+            physicaltable sysname        COLLATE DATABASE_DEFAULT NOT NULL,
+            workercode    nvarchar(100)  COLLATE DATABASE_DEFAULT NOT NULL,
+            [table]       nvarchar(100)  COLLATE DATABASE_DEFAULT NOT NULL,
+            layer         nvarchar(110)  COLLATE DATABASE_DEFAULT NOT NULL,
+            kind          nvarchar(10)   COLLATE DATABASE_DEFAULT NULL,
+            basetable     sysname        COLLATE DATABASE_DEFAULT NULL,
+            owner         nvarchar(128)  COLLATE DATABASE_DEFAULT NULL,
+            name          nvarchar(200)  COLLATE DATABASE_DEFAULT NOT NULL,
+            value         nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+            label         nvarchar(700)  COLLATE DATABASE_DEFAULT NOT NULL,
+            path          nvarchar(1000) COLLATE DATABASE_DEFAULT NOT NULL,
+            idkey         nvarchar(1000) COLLATE DATABASE_DEFAULT NOT NULL,
+            ishead        bit            NOT NULL DEFAULT 0,
+            keepslang     bit            NOT NULL DEFAULT 0
+        );
+
+        INSERT INTO #grem (rowno, physicaltable, workercode, [table], layer, kind, basetable, owner, name, value, label, path, idkey)
+        SELECT d.rowno, d.physicaltable, d.workercode, d.[table], d.layer, s.kind, b.basetable,
+               LEFT(b.basetable, LEN(b.basetable) - LEN(d.[table])),
+               d.name, d.value,
+               CONCAT(d.apiname, CASE WHEN LEFT(d.name, 7) <> N'Detail.' THEN N'=' + d.value END),
+               gp.path,
+               d.idkey
+        FROM #desired AS d
+        JOIN #scope AS s ON s.[table] = d.[table] AND s.layer = d.layer
+        CROSS APPLY sm.ResolveLayer(s.layer) AS l
+        CROSS APPLY (SELECT LEFT(s.physicaltable, LEN(s.physicaltable) - LEN(l.suffix)) AS basetable) AS b
+        CROSS APPLY sm.GroupPath(d.name, d.value, N'SettingGroup') AS gp
+        WHERE d.op = N'remove'
+          AND (d.settingtype = N'SettingGroup'
+               OR EXISTS (SELECT 1 FROM #current AS c WHERE c.idkey = d.idkey AND c.settingtype = N'SettingGroup'));
+
+        TRUNCATE TABLE #groupblocks;
+        INSERT INTO #groupblocks (part, name, value, settingtype, canhead, physicaltable, workercode, idkey)
+        SELECT CONCAT(t.physicaltable, NCHAR(1), t.workercode), c.name, c.value, c.settingtype, 1,
+               c.physicaltable, c.workercode, c.idkey
+        FROM (SELECT DISTINCT physicaltable, workercode FROM #grem) AS t
+        JOIN #current AS c ON c.physicaltable = t.physicaltable AND c.workercode = t.workercode;
+
+        INSERT INTO #groupblocks (part, name, value, settingtype, canhead, physicaltable, workercode, idkey)
+        SELECT CONCAT(t.physicaltable, NCHAR(1), t.workercode), c.name, c.value, c.settingtype, 0,
+               c.physicaltable, c.workercode, c.idkey
+        FROM (SELECT DISTINCT physicaltable, workercode, [table] FROM #grem WHERE kind IN (N'base', N'env')) AS t
+        JOIN #scope AS s ON s.kind = N'lang' AND s.[table] = t.[table]
+        JOIN #current AS c ON c.physicaltable = s.physicaltable AND c.workercode = s.workercode;
+
+        INSERT INTO #groupblocks (part, name, value, settingtype, canhead, physicaltable, workercode, idkey, rowno)
+        SELECT CONCAT(t.physicaltable, NCHAR(1), t.workercode), u.name, u.value, u.settingtype, 0,
+               u.physicaltable, u.workercode, u.idkey, u.rowno
+        FROM (SELECT DISTINCT physicaltable, workercode, [table], kind FROM #grem) AS t
+        JOIN #desired AS u
+          ON u.op IN (N'upsert', N'move') AND u.name IS NOT NULL
+         AND ((u.physicaltable = t.physicaltable AND u.workercode = t.workercode)
+              OR (t.kind IN (N'base', N'env') AND u.[table] = t.[table] AND u.layer LIKE N'lang:%'));
+
+        EXEC sm.GroupBlocks;
+
+        -- The removed group row is a block head of its table: its block is the rows with blockkey = its path.
+        UPDATE g
+        SET ishead = 1, path = b.path
+        FROM #grem AS g
+        JOIN #groupblocks AS b ON b.canhead = 1 AND b.ishead = 1 AND b.idkey = g.idkey;
+
+        -- Still exists after the plan in another in-scope base/env table of the view.
+        UPDATE g
+        SET keepslang = 1
+        FROM #grem AS g
+        WHERE g.kind IN (N'base', N'env')
+          AND (EXISTS (SELECT 1
+                       FROM #scope AS s
+                       JOIN #current AS c ON c.physicaltable = s.physicaltable AND c.workercode = s.workercode
+                       WHERE s.[table] = g.[table] AND s.kind IN (N'base', N'env')
+                         AND NOT (s.physicaltable = g.physicaltable AND s.workercode = g.workercode)
+                         AND c.settingtype = N'SettingGroup' AND c.name = g.name
+                         AND (LEFT(g.name, 7) = N'Detail.' OR c.value = g.value)
+                         AND NOT EXISTS (SELECT 1 FROM #desired AS x WHERE x.op = N'remove' AND x.idkey = c.idkey))
+               OR EXISTS (SELECT 1
+                          FROM #desired AS x
+                          JOIN #scope AS s ON s.[table] = x.[table] AND s.layer = x.layer
+                          WHERE x.[table] = g.[table] AND s.kind IN (N'base', N'env') AND x.op = N'upsert'
+                            AND NOT (x.physicaltable = g.physicaltable AND x.workercode = g.workercode)
+                            AND x.settingtype = N'SettingGroup' AND x.name = g.name
+                            AND (LEFT(g.name, 7) = N'Detail.' OR x.value = g.value)));
+
+        -- Still exists in a base/env table of the view outside the scope (only where lang rows would be deleted).
+        DECLARE @gid int, @gname nvarchar(200), @gvalue nvarchar(400), @otable sysname, @owc nvarchar(100),
+                @found bit, @gsql nvarchar(max);
+        DECLARE others CURSOR LOCAL FAST_FORWARD FOR
+            SELECT g.id, g.name, g.value, pt.physicaltable, l.workercode
+            FROM #grem AS g
+            CROSS APPLY sm.ProcessTables(g.owner) AS pt
+            CROSS APPLY sm.ResolveLayer(pt.layer) AS l
+            WHERE g.ishead = 1 AND g.keepslang = 0 AND g.kind IN (N'base', N'env')
+              AND g.[table] <> N'ServerProcessSettings'
+              AND pt.basetable = g.basetable
+              AND pt.layer NOT LIKE N'lang:%'
+              AND l.kind IN (N'base', N'env')
+              AND NOT EXISTS (SELECT 1 FROM #scope AS s WHERE s.physicaltable = pt.physicaltable AND s.workercode = l.workercode)
+              AND EXISTS (SELECT 1
+                          FROM #groupblocks AS b
+                          WHERE b.part = CONCAT(g.physicaltable, NCHAR(1), g.workercode)
+                            AND b.canhead = 0 AND b.rowno IS NULL AND b.blockkey = g.path);
+        OPEN others;
+        FETCH NEXT FROM others INTO @gid, @gname, @gvalue, @otable, @owc;
+        WHILE @@FETCH_STATUS = 0
+        BEGIN
+            IF sm.IsSafeName(@otable) = 0
+                THROW 51001, N'Invalid table name.', 1;
+            SET @found = 0;
+            SET @gsql = N'
+                IF EXISTS (SELECT 1 FROM dbo.' + QUOTENAME(@otable) + N'
+                           WHERE workercode = @wc AND settingtype = N''SettingGroup'' AND NAME = @name
+                             AND (LEFT(@name, 7) = N''Detail.'' OR VALUE = @value))
+                    SET @found = 1;';
+            EXEC sys.sp_executesql @gsql, N'@wc nvarchar(100), @name nvarchar(200), @value nvarchar(400), @found bit OUTPUT',
+                 @owc, @gname, @gvalue, @found OUTPUT;
+            IF @found = 1
+                UPDATE #grem SET keepslang = 1 WHERE id = @gid;
+            FETCH NEXT FROM others INTO @gid, @gname, @gvalue, @otable, @owc;
+        END
+        CLOSE others;
+        DEALLOCATE others;
+
+        -- A removed group, or a row of its block (in its table, or a lang row the remove deletes), that is also
+        -- upserted or moved: GROUP_REMOVE_CONFLICT (thrown before ordering).
+        INSERT INTO #warnings (severity, code, message)
+        SELECT N'Error', N'GROUP_REMOVE_CONFLICT',
+               LEFT(CONCAT(N'Group ', g.label, N' in ', g.physicaltable, N' (', g.[table], N', ', g.layer,
+                           N') is removed by this plan, which also ', CASE u.op WHEN N'move' THEN N'moves ' ELSE N'upserts ' END,
+                           CASE WHEN u.idkey = g.idkey THEN N'that group'
+                                ELSE CONCAT(N'the row ', u.apiname,
+                                            CASE WHEN u.settingtype = N'SettingGroup' AND LEFT(u.name, 7) <> N'Detail.' THEN N'=' + u.value END,
+                                            N' (', u.layer, N') of its block') END,
+                           N'. Remove the group with its rows, or keep it; not both in one plan.'), 1000)
+        FROM #grem AS g
+        JOIN #desired AS u ON u.op IN (N'upsert', N'move')
+        WHERE u.idkey = g.idkey
+           OR (g.ishead = 1
+               AND EXISTS (SELECT 1
+                           FROM #groupblocks AS b
+                           WHERE b.part = CONCAT(g.physicaltable, NCHAR(1), g.workercode)
+                             AND b.rowno = u.rowno AND b.blockkey = g.path)
+               AND ((u.physicaltable = g.physicaltable AND u.workercode = g.workercode)
+                    OR (g.keepslang = 0 AND g.kind IN (N'base', N'env') AND u.[table] = g.[table]
+                        AND u.layer LIKE N'lang:%')))
+        ORDER BY g.rowno, u.rowno;
+
+        IF EXISTS (SELECT 1 FROM #warnings WHERE severity = N'Error' AND code = N'GROUP_REMOVE_CONFLICT')
+            EXEC sm.PlanGuardrails @process = NULL, @throwonly = 1;
+
+        -- The rows the group removes besides the group row: its block in its own table and, for a base/env remove
+        -- whose group does not remain elsewhere, the rows of the view's lang tables in #scope that fall in its block
+        -- (tested against the groups of its table: Column.A.B.Caption stays when Column=A.B remains).
+        SELECT DISTINCT c.idkey, c.physicaltable, c.[table], c.layer, c.workercode, c.name, c.value, c.settingtype,
+               c.listvalue, c.ordernr, g.label, g.rowno
+        INTO #gdel
+        FROM #grem AS g
+        JOIN #groupblocks AS b
+          ON b.part = CONCAT(g.physicaltable, NCHAR(1), g.workercode) AND b.rowno IS NULL AND b.blockkey = g.path
+         AND (b.canhead = 1 OR (g.keepslang = 0 AND g.kind IN (N'base', N'env')))
+        JOIN #current AS c ON c.idkey = b.idkey
+        WHERE g.ishead = 1
+          AND NOT EXISTS (SELECT 1 FROM #desired AS x WHERE x.op = N'remove' AND x.idkey = c.idkey);
+
+        -- ServerSetting rows are never changed by plans (their values are not loaded, so a Delete could not be
+        -- rolled back); duplicates of a row to delete make its Delete ambiguous.
+        INSERT INTO #warnings (severity, code, message)
+        SELECT N'Error', N'SERVERSETTING',
+               LEFT(CONCAT(N'ServerSetting rows are not managed by plans: removing group ', MIN(x.label), N' would delete ',
+                           x.physicaltable, N' (', MIN(x.layer), N') ', x.name, N'. Remove that row outside plans first.'), 1000)
+        FROM #gdel AS x
+        WHERE x.settingtype = N'ServerSetting'
+        GROUP BY x.physicaltable, x.workercode, x.name
+        ORDER BY MIN(x.rowno), x.physicaltable, x.name;
+
+        INSERT INTO #warnings (severity, code, message)
+        SELECT N'Error', N'DUPLICATE_ROW',
+               LEFT(CONCAT(N'Duplicate rows in ', MIN(c.physicaltable), N' (workercode ', MIN(c.workercode), N'): NAME ', MIN(c.name),
+                           N' occurs ', COUNT(*), N' times. Clean up the duplicates before removing group ',
+                           (SELECT MIN(x.label) FROM #gdel AS x WHERE x.idkey = c.idkey), N'.'), 1000)
+        FROM #current AS c
+        WHERE c.idkey IN (SELECT idkey FROM #gdel)
+        GROUP BY c.idkey
+        HAVING COUNT(*) > 1
+        ORDER BY MIN(c.physicaltable), MIN(c.name);
+
+        IF EXISTS (SELECT 1 FROM #warnings WHERE severity = N'Error')
+            EXEC sm.PlanGuardrails @process = NULL, @throwonly = 1;
+
+        INSERT INTO #items (action, physicaltable, [table], layer, workercode, name, oldvalue, oldsettingtype, oldlistvalue, oldordernr)
+        SELECT DISTINCT N'Delete', physicaltable, [table], layer, workercode, name, value, settingtype, listvalue, ordernr
+        FROM #gdel;
+    END
+
     IF @mode = N'replace'
         INSERT INTO #items (action, physicaltable, [table], layer, workercode, name, oldvalue, oldsettingtype, oldlistvalue, oldordernr)
         SELECT N'Delete', c.physicaltable, s.[table], s.layer, c.workercode, c.name, c.value, c.settingtype, c.listvalue, c.ordernr
@@ -58,7 +308,109 @@ BEGIN
           AND c.settingtype <> N'ServerSetting'
           AND NOT EXISTS (SELECT 1 FROM #desired AS d WHERE d.op = N'upsert' AND d.idkey = c.idkey);
 
+    -- Group rows (merge): an explicit ordernr is refused, new or existing (it would place or move the group row
+    -- without its block; plain rows keep ordernr as an expert override). On an existing group row an after is not
+    -- resolved, the block stays where it is.
+    IF @mode = N'merge'
+    BEGIN
+        INSERT INTO #warnings (severity, code, message)
+        SELECT N'Error', N'GROUP_ORDERNR',
+               LEFT(CONCAT(N'Group ', d.apiname, CASE WHEN LEFT(d.name, 7) <> N'Detail.' THEN N'=' + d.value END,
+                           N' in ', d.physicaltable, N' (', d.[table], N', ', d.layer,
+                           N') has an explicit ordernr; a group is placed as a whole block: use after (or move for an existing group).'), 1000)
+        FROM #desired AS d
+        WHERE d.op = N'upsert' AND d.settingtype = N'SettingGroup' AND d.ordernr IS NOT NULL
+        ORDER BY d.rowno;
+
+        INSERT INTO #warnings (severity, code, message)
+        SELECT N'Warning', N'GROUP_NOT_MOVED',
+               LEFT(CONCAT(N'Group ', d.apiname, CASE WHEN LEFT(d.name, 7) <> N'Detail.' THEN N'=' + d.value END,
+                           N' already exists in ', d.[table], N' (', d.layer, N'); after ', d.after,
+                           N' is ignored and the group keeps its position (use move to change its position).'), 1000)
+        FROM #desired AS d
+        WHERE d.op = N'upsert' AND d.settingtype = N'SettingGroup' AND d.after IS NOT NULL
+          AND EXISTS (SELECT 1 FROM #current AS c WHERE c.idkey = d.idkey)
+        ORDER BY d.rowno;
+    END
+
+    -- move (merge only, checked by sm.CreatePlan): no item here; sm.PlanOrder moves the block. The group row must
+    -- exist as a SettingGroup row.
+    INSERT INTO #warnings (severity, code, message)
+    SELECT N'Error', N'GROUP_NOT_FOUND',
+           LEFT(CONCAT(N'Group to move not found: ', d.apiname, CASE WHEN LEFT(d.name, 7) <> N'Detail.' THEN N'=' + d.value END,
+                       N' in ', d.physicaltable, N' (', d.[table], N', ', d.layer,
+                       N'). Name an existing group of this table.'), 1000)
+    FROM #desired AS d
+    WHERE d.op = N'move'
+      AND NOT EXISTS (SELECT 1 FROM #current AS c WHERE c.idkey = d.idkey AND c.settingtype = N'SettingGroup')
+    ORDER BY d.rowno;
+
+    -- Places new rows and moves groups; returns early when there is neither. Errors collected so far are thrown here too.
     EXEC sm.PlanOrder;
+    EXEC sm.PlanGuardrails @process = NULL, @throwonly = 1;
+
+    -- SPLIT_GROUP: a table the plan changes (Insert, Delete, Update with another ordernr; moves and renumbering
+    -- appear as ordernr Updates by now) whose CURRENT state already has a split block (rows not contiguous by sort
+    -- key ordernr, NAME, VALUE) or sibling group rows (same family) tied on ordernr. One warning per table naming up
+    -- to 5 groups. Block rule: sm.GroupBlocks, one part per table. Lang tables have no group rows, so they never warn.
+    TRUNCATE TABLE #groupblocks;
+    INSERT INTO #groupblocks (part, name, value, settingtype, canhead, physicaltable, workercode, [table], ordernr)
+    SELECT CONCAT(c.physicaltable, NCHAR(1), c.workercode), c.name, c.value, c.settingtype, 1,
+           c.physicaltable, c.workercode, c.[table], ISNULL(c.ordernr, 0)
+    FROM #current AS c
+    WHERE EXISTS (SELECT 1 FROM #current AS g
+                  WHERE g.physicaltable = c.physicaltable AND g.workercode = c.workercode AND g.settingtype = N'SettingGroup')
+      AND EXISTS (SELECT 1 FROM #items AS i
+                  WHERE i.physicaltable = c.physicaltable AND i.workercode = c.workercode
+                    AND (i.action IN (N'Insert', N'Delete')
+                         OR (i.action = N'Update' AND i.ordernr IS NOT NULL AND i.ordernr <> ISNULL(i.oldordernr, -1))));
+
+    IF EXISTS (SELECT 1 FROM #groupblocks)
+    BEGIN
+        EXEC sm.GroupBlocks;
+
+        SELECT physicaltable, workercode, [table], ordernr, blockkey, family, CONVERT(int, ishead) AS ishead,
+               ROW_NUMBER() OVER (PARTITION BY part ORDER BY ordernr, name, value) AS rn
+        INTO #sg1
+        FROM #groupblocks;
+
+        SELECT physicaltable, workercode, MIN([table]) AS [table], blockkey,
+               MIN(CASE WHEN ishead = 1 THEN rn END) AS grouprn, MIN(rn) AS firstrn, MAX(rn) AS endrn, COUNT(*) AS cnt
+        INTO #sgblocks
+        FROM #sg1
+        WHERE blockkey IS NOT NULL
+        GROUP BY physicaltable, workercode, blockkey
+        HAVING MAX(ishead) = 1;
+
+        SELECT DISTINCT physicaltable, workercode, [table], blockkey
+        INTO #sgsplit
+        FROM
+        (
+            SELECT physicaltable, workercode, [table], blockkey
+            FROM #sgblocks
+            WHERE grouprn <> firstrn OR endrn - firstrn + 1 <> cnt
+            UNION ALL
+            SELECT h.physicaltable, h.workercode, h.[table], h.blockkey
+            FROM #sg1 AS h
+            WHERE h.ishead = 1
+              AND EXISTS (SELECT 1 FROM #sg1 AS t
+                          WHERE t.ishead = 1 AND t.physicaltable = h.physicaltable AND t.workercode = h.workercode
+                            AND t.ordernr = h.ordernr AND t.blockkey <> h.blockkey AND t.family = h.family)
+        ) AS s;
+
+        INSERT INTO #warnings (severity, code, message)
+        SELECT N'Warning', N'SPLIT_GROUP',
+               LEFT(CONCAT(N'Setting groups in ', t.physicaltable, N' (workercode ', t.workercode,
+                           N') are not contiguous or share an ordernr: ',
+                           (SELECT STRING_AGG(CONVERT(nvarchar(max), q.blockkey), N', ') WITHIN GROUP (ORDER BY q.blockkey)
+                            FROM (SELECT TOP (5) s.blockkey FROM #sgsplit AS s
+                                  WHERE s.physicaltable = t.physicaltable AND s.workercode = t.workercode
+                                  ORDER BY s.blockkey) AS q),
+                           N'. New and moved rows may land inside the wrong group; renumber the table first',
+                           N' (renumber_plan tool).'), 1000)
+        FROM (SELECT DISTINCT physicaltable, workercode FROM #sgsplit) AS t
+        ORDER BY t.physicaltable, t.workercode;
+    END;
 
     WITH numbered AS
     (

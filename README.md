@@ -5,8 +5,8 @@ The stack has two containers:
 
 | Service | Image | Port | Purpose |
 |---|---|---|---|
-| `vtmf-settings` | `vtmf/settingsmanager:v2.17` | `8080` | Blazor web UI |
-| `vtmf-settings-mcp` | `vtmf/settingsmanager-mcp:v2.17` | `127.0.0.1:8081` | Optional MCP server for Claude Code |
+| `vtmf-settings` | `vtmf/settingsmanager:v2.21` | `8080` | Blazor web UI |
+| `vtmf-settings-mcp` | `vtmf/settingsmanager-mcp:v2.21` | `127.0.0.1:8081` | Optional MCP server for Claude Code |
 
 Development and build instructions are in [VTMF.Settings/README.md](VTMF.Settings/README.md).
 
@@ -17,7 +17,7 @@ Create a folder (e.g. `vtmf-settings/`) and save this as `compose.yaml` in it:
 ```yaml
 services:
   vtmf-settings:
-    image: vtmf/settingsmanager:v2.17
+    image: vtmf/settingsmanager:v2.21
     ports:
       - "8080:8080"
     env_file: settings.env
@@ -28,7 +28,7 @@ services:
       - ${SQL_SCRIPTS_PATH}:/app/sql-scripts
 
   vtmf-settings-mcp:
-    image: vtmf/settingsmanager-mcp:v2.17
+    image: vtmf/settingsmanager-mcp:v2.21
     ports:
       - "127.0.0.1:8081:8080"   # loopback only: the MCP server has no authentication
     env_file: settings.env
@@ -102,6 +102,9 @@ The `vtmf-settings-mcp` container exposes the settings as MCP tools at `http://l
 The `vtmf-settings` Claude Code plugin connects to it and adds the `sm-module` skill, which checks and installs
 the `sm` module (stored procedures) in a client database before Claude works with it.
 
+**Create the separate directory where place the files from `consultant` directory.** And run then setting management sessions from there. The `consultant` directory contains a setup which makes Claude to pick up the settingmanager mcp and plugins and context so you dont have to explain it every time. 
+
+
 1. Make sure the MCP container is running (step 3).
 2. The repo `github.com/neemevool/settingmanager` is private. Git must be able to clone it without a prompt,
    e.g. `gh auth login` then `gh auth setup-git`, or an SSH key / credential helper.
@@ -144,7 +147,7 @@ Tools for changing settings (see [6. Changing settings with Claude](#6-changing-
 | Group | Tools |
 |---|---|
 | Sessions (what you changed, and why) | `start_session`, `list_sessions`, `session_changes`, `close_session` |
-| Previews and changes | `create_plan`, `get_plan`, `list_plans`, `apply_plan` |
+| Previews and changes | `create_plan`, `renumber_plan`, `get_plan`, `list_plans`, `apply_plan` |
 | Undo | `rollback_plan`, `rollback_session` |
 | Copying between clients | `compare_clients`, `clone_plan`, `legacy_env_migration_plan` |
 
@@ -173,13 +176,13 @@ Two parts must be updated together: the MCP image and the plugin.
 
 Check the versions:
 
-- `/plugin` shows the plugin version (currently 1.2.0).
-- `module_status` shows the `sm` module version in a client database (currently 6). Ask
+- `/plugin` shows the plugin version (currently 1.3.0).
+- `module_status` shows the `sm` module version in a client database (currently 7). Ask
   `Is the sm module up to date for prod-client1?`
-- `feature_module_status` shows the feature module version in the metadata database (currently 1). Ask
+- `feature_module_status` shows the feature module version in the metadata database (currently 2). Ask
   `Is the feature module up to date?`
 
-Features need an MCP image with client module 6 and feature (metabase) module 1. After updating the image,
+Features need an MCP image with client module 7 and feature (metabase) module 2. After updating the image,
 the `sm-module` skill installs both the next time you work with a client or a feature.
 
 If `module_status` reports:
@@ -202,6 +205,10 @@ The feature module reports the same way (`feature_module_outdated`, `feature_mod
 | `Where is the setting Email.SMTP.Server used in prod-client1?` | `settings_usage`. |
 | `Set Email.SMTP.Server to smtp.example.com in prod-client1.` | Claude shows a preview table and waits for your "yes" before changing anything. |
 | `Add a LOT column after DOCNR in the document list of tproc` | Claude finds the current settings, asks what you are setting up, shows a preview, applies after "yes". |
+| `Add the barcode column after the document number in the document list of tproc.` | `get_settings` to see the existing columns, then `create_plan` with the new column placed after `DOCNR`; preview, applies after "yes". |
+| `Move the date column first.` | `create_plan` with a move of that column (the whole column with its settings moves); Claude shows one "Move column" line. |
+| `Remove the old price column.` | `create_plan` removing the column with all its settings and translations; Claude lists them and says how many. |
+| `Tidy the layout table.` | `renumber_plan`; gathers each column's settings together and renumbers; preview, applies after "yes". |
 | `Copy process tproc from prod-client1 to prod-client2.` | `compare_clients` and `clone_plan`; preview, then apply after "yes". |
 | `Compare tproc between prod-client1 and prod-client2.` | `compare_clients`; lists the differences. Nothing is changed. |
 | `Undo the last change.` | `rollback_plan` for the latest change. |

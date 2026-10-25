@@ -25,6 +25,6 @@ public sealed class PlanTablesTests(SqlServerFixture fixture)
         await fixture.Installer.InstallAsync(SqlServerFixture.PlanClientName);
 
         var version = await fixture.ScalarOnAsync<int>(SqlServerFixture.PlanClientName, "SELECT version FROM sm.moduleinfo");
-        Assert.Equal(6, version);
+        Assert.Equal(7, version);
     }
 }

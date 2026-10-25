@@ -1,0 +1,14 @@
+{
+  "extraKnownMarketplaces": {
+    "vtmf": {
+      "source": { "source": "github", "repo": "neemevool/settingmanager" }
+    }
+  },
+  "enabledPlugins": {
+    "vtmf-settings@vtmf": true
+  },
+  "enabledMcpjsonServers": ["vtmf-settings"],
+  "permissions": {
+    "deny": ["Grep", "Glob", "Bash(grep:*)", "Bash(find:*)", "Bash(rg:*)"]
+  }
+}

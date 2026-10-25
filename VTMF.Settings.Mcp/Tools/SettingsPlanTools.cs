@@ -59,19 +59,40 @@ public sealed class SettingsPlanTools(SmClient sm, SmOrchestrator orchestrator)
         "table is the view suffix such as DocumentListLayout, ProcessSettings or ServerProcessSettings. " +
         "layer is base, env:{environment} or lang:{language code}; worker-level rows are never written (workercode is not accepted), use environment or language layers. " +
         "settingtype is Setting (default) or SettingGroup; ServerSetting values are never available, never shown and cannot be written. " +
-        "op is 'upsert' (default) or 'remove' (deletes the row). value and listvalue are the new values. " +
-        "ordernr is the sort position; when omitted in merge mode the row is placed by 'after' or appended. " +
-        "after anchors the row after another existing row, given as NAME or NAME=VALUE (use NAME=VALUE for SettingGroup rows such as Column=DOCNR). " +
+        "op is 'upsert' (default), 'remove' (deletes the row) or 'move' (repositions an existing SettingGroup row and its block without changing values; group rows only, 'after' required, merge mode only, not ServerProcessSettings; a missing group fails with group_not_found). value and listvalue are the new values. " +
+        "ordernr is the sort position; when omitted in merge mode the row is placed by 'after' or appended; do not give ordernr on SettingGroup rows in merge mode (group_ordernr). " +
+        "after anchors the row after another existing row, given as NAME or NAME=VALUE. " +
+        "Groups: a SettingGroup row and the rows under it (NAME.VALUE. e.g. Column.DOCNR., or Detail.X. for a group named Detail.X) are placed, moved and removed as one block. " +
+        "For a SettingGroup row 'after' names a sibling group (Column=DOCNR, Detail.Lines) or '^' for first; a missing anchor refuses the plan (group_anchor_not_found) and an anchor that is not a sibling group too (group_anchor_invalid). " +
+        "Existing group rows are not moved by upsert (warning GROUP_NOT_MOVED): use op move. " +
+        "remove of a group removes its block, and its rows in language tables (unless the group remains in another base/env table); a plan that removes a group and also upserts or moves it or its rows is refused (group_remove_conflict). " +
+        "Warnings to relay: ANCHOR_OUTSIDE_GROUP (a new row of a group was anchored outside its group; it is placed at the end of its group), RENUMBER (no free ordernr where the rows go; the table is renumbered in steps of 10 and existing rows change ordernr), and SPLIT_GROUP (a group's rows are not contiguous: suggest renumber_plan). " +
         "Options: createTable allows creating a missing table or layer table; targetAlias allows writing where the process settings are an alias of another process. " +
         "The result has planId, checksum, status (Created, NoChanges), items and warnings; pass planId and checksum to apply_plan after the user confirms the items. Fails with session_closed if the session is closed.")]
     public Task<ToolResult<SmPlanResult>> CreatePlan(
         [Description(ClientDescription)] string client,
         [Description(SessionDescription)] int sessionId,
-        [Description("Desired state: { process, mode: merge|replace, scope: [{ table, layer }], rows: [{ table, layer, name, value, settingtype, listvalue, ordernr, op: upsert|remove, after }] }.")] SmDesiredState desired,
+        [Description("Desired state: { process, mode: merge|replace, scope: [{ table, layer }], rows: [{ table, layer, name, value, settingtype, listvalue, ordernr, op: upsert|remove|move, after }] }. op move: SettingGroup rows only, after required. after: NAME or NAME=VALUE; for a SettingGroup row also ^ (first of its family); ^ is invalid on any other row.")] SmDesiredState desired,
         [Description("Human-readable description of the change, stored with the plan and shown in history.")] string description,
         [Description(OptionsDescription)] SmPlanOptions? options = null,
         CancellationToken cancellationToken = default) =>
         ToolResult.RunAsync(() => sm.CreatePlanAsync(client, desired, description, sessionId, options, "manual", false, cancellationToken));
+
+    [McpServerTool(Name = "renumber_plan", ReadOnly = false, Destructive = false)]
+    [Description(NotChanging +
+        "Builds a plan that tidies the ordernr of one existing settings table/layer of the process: every SettingGroup row and the rows under it are made one contiguous block, in the current group order, and ordernr is renumbered evenly. Values are never changed, only ordernr. " +
+        "Use it when create_plan warns SPLIT_GROUP or the rows of a group are scattered. Rows that belong to no group (orphans) are placed last and reported with warning ORPHAN_ROWS. " +
+        "Works on existing own tables only: it cannot create a table or write through an alias (a missing table fails with TABLE_MISSING, an alias-only table with ALIAS_TARGET; ignore any createTable/targetAlias hint in those messages). ServerProcessSettings is refused (invalid_desired), as are duplicate rows (duplicate_row). " +
+        "The result has planId, checksum, status (Created, NoChanges), items and warnings; apply it with apply_plan after the user confirms. Fails with session_closed if the session is closed.")]
+    public Task<ToolResult<SmPlanResult>> RenumberPlan(
+        [Description(ClientDescription)] string client,
+        [Description(SessionDescription)] int sessionId,
+        [Description(ProcessDescription)] string process,
+        [Description("Settings table (view suffix) to renumber, e.g. DocumentListLayout.")] string table,
+        [Description("Layer to renumber: base, env:{environment} or lang:{language code}.")] string layer,
+        [Description("Human-readable description of the change; defaults to 'Renumber {table} ({layer})'.")] string? description = null,
+        CancellationToken cancellationToken = default) =>
+        ToolResult.RunAsync(() => sm.CreateRenumberPlanAsync(client, process, table, layer, string.IsNullOrWhiteSpace(description) ? $"Renumber {table} ({layer})" : description, sessionId, false, cancellationToken));
 
     [McpServerTool(Name = "get_plan", ReadOnly = true)]
     [Description("Returns a stored plan with its items and warnings, including its current status (Created, Applied, Failed, Stale, RolledBack).")]

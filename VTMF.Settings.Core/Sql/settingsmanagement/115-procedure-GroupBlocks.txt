@@ -1,0 +1,54 @@
+-- SettingGroup rule, part 2 (spec 2026-10-24 setting groups, section 1): blocks over a set of rows. The caller creates
+-- and fills #groupblocks; this procedure sets path, family, ishead and blockkey. Minimal shape (the caller may add
+-- columns of its own, e.g. a reference to its source row; they are left alone):
+--     id          int            NOT NULL PRIMARY KEY (any unique number; IDENTITY is fine)
+--     part        nvarchar(400)  COLLATE DATABASE_DEFAULT NOT NULL   rows form blocks only within the same part
+--     name        nvarchar(200)  COLLATE DATABASE_DEFAULT NOT NULL
+--     value       nvarchar(400)  COLLATE DATABASE_DEFAULT NULL
+--     settingtype nvarchar(20)   COLLATE DATABASE_DEFAULT NOT NULL
+--     canhead     bit            NOT NULL   0: never a group of a block (e.g. lang rows tested against the group rows
+--                                           of their base table, or desired rows tested against the current ones)
+--     path, family, blockkey nvarchar(1000) COLLATE DATABASE_DEFAULT NULL; ishead bit NULL   (output)
+-- A part is normally one settings table (physicaltable, workercode).
+--   path      sm.GroupPath.
+--   ishead    1 for a SettingGroup row (canhead = 1) that is not under the path of a SettingGroup row (canhead = 1)
+--             with another NAME (its path does not start with that path + '.'). Groups never nest (G13): such a row
+--             is a child of the outer block. A group row is never a child of a sibling with the same NAME:
+--             value-keyed siblings are always their own block heads (Column=A.B is not inside Column=A).
+--   family    sm.GroupPath family, on block heads only (NULL on every other row).
+--   blockkey  the block the row belongs to: a head's own path; for any other row the path of the head with the
+--             LONGEST path such that the row's path starts with that path + '.' (a SettingGroup row is never put
+--             under a head with its own NAME); NULL: the row is in no block (plain row, or orphan child).
+--             Column.A.B.Caption belongs to Column=A.B, not to Column=A.
+CREATE OR ALTER PROCEDURE sm.GroupBlocks
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    UPDATE g
+    SET path = p.path, family = p.family
+    FROM #groupblocks AS g
+    CROSS APPLY sm.GroupPath(g.name, g.value, g.settingtype) AS p;
+
+    UPDATE g
+    SET ishead = CASE WHEN g.settingtype = N'SettingGroup' AND g.canhead = 1
+                           AND NOT EXISTS (SELECT 1
+                                           FROM #groupblocks AS x
+                                           WHERE x.part = g.part AND x.canhead = 1
+                                             AND x.settingtype = N'SettingGroup' AND x.name <> g.name
+                                             AND LEFT(g.path, DATALENGTH(x.path + N'.') / 2) = x.path + N'.')
+                      THEN 1 ELSE 0 END
+    FROM #groupblocks AS g;
+
+    UPDATE g
+    SET family   = CASE WHEN g.ishead = 1 THEN g.family END,
+        blockkey = CASE WHEN g.ishead = 1 THEN g.path ELSE h.path END
+    FROM #groupblocks AS g
+    OUTER APPLY (SELECT TOP (1) x.path
+                 FROM #groupblocks AS x
+                 WHERE g.ishead = 0 AND x.part = g.part AND x.ishead = 1
+                   AND LEFT(g.path, DATALENGTH(x.path + N'.') / 2) = x.path + N'.'
+                   AND NOT (g.settingtype = N'SettingGroup' AND x.name = g.name)
+                 ORDER BY DATALENGTH(x.path) DESC, x.id) AS h;
+END
+GO

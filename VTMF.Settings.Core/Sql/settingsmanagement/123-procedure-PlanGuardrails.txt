@@ -8,6 +8,10 @@
 --   TABLE_MISSING (51010)  the physical table is missing (no alias table) and createTable is not set.
 --   DUPLICATE_ROW (51011)  a touched identity (desired row, or current row of a replace scope) has more than one
 --                          physical row.
+-- Later plan steps add their own errors and throw them through the same step (@throwonly = 1: no checks, only the
+-- throw; numbers below; an unmapped code throws 51006):
+--   GROUP_ANCHOR_NOT_FOUND (51017), GROUP_ANCHOR_INVALID (51018) sm.PlanOrder; GROUP_ORDERNR (51020),
+--   GROUP_NOT_FOUND (51019, move of a missing group) sm.PlanDiff; GROUP_REMOVE_CONFLICT (51021) sm.PlanDiff (group removes).
 -- Without errors: a CreateTable item per missing table (createTable) with warning CREATE_TABLE, and the warnings
 -- ALIAS_TARGET (plan writes to the alias table; names the variants), OVERRIDE_PROC (active Get{process}{view}Info
 -- for a touched base table, same rule as sm.GetTables) and LEGACY_ENV (touched base table has rows with
@@ -16,12 +20,15 @@
 -- values) are not desired rows and are therefore not refused.
 CREATE OR ALTER PROCEDURE sm.PlanGuardrails
     @process     nvarchar(100),
-    @createTable bit = 0
+    @createTable bit = 0,
+    @throwonly   bit = 0
 AS
 BEGIN
     SET NOCOUNT ON;
 
     SET @createTable = ISNULL(@createTable, 0);
+    IF @throwonly = 1
+        GOTO throwerrors;
 
     INSERT INTO #warnings (severity, code, message)
     SELECT N'Error', N'SERVERSETTING',
@@ -89,14 +96,21 @@ BEGIN
     FROM dup
     ORDER BY physicaltable, workercode, name, value;
 
+throwerrors:
     IF EXISTS (SELECT 1 FROM #warnings WHERE severity = N'Error')
     BEGIN
         DECLARE @number int, @message nvarchar(2048);
         SELECT TOP (1) @number = CASE code
-                                     WHEN N'SERVERSETTING' THEN 51007
-                                     WHEN N'ALIAS_TARGET'  THEN 51009
-                                     WHEN N'TABLE_MISSING' THEN 51010
-                                     WHEN N'DUPLICATE_ROW' THEN 51011
+                                     WHEN N'SERVERSETTING'          THEN 51007
+                                     WHEN N'ALIAS_TARGET'           THEN 51009
+                                     WHEN N'TABLE_MISSING'          THEN 51010
+                                     WHEN N'DUPLICATE_ROW'          THEN 51011
+                                     WHEN N'GROUP_ANCHOR_NOT_FOUND' THEN 51017
+                                     WHEN N'GROUP_ANCHOR_INVALID'   THEN 51018
+                                     WHEN N'GROUP_NOT_FOUND'        THEN 51019
+                                     WHEN N'GROUP_ORDERNR'          THEN 51020
+                                     WHEN N'GROUP_REMOVE_CONFLICT'  THEN 51021
+                                     ELSE 51006   -- unmapped code: invalid_desired rather than THROW NULL
                                  END
         FROM #warnings
         WHERE severity = N'Error'
@@ -106,6 +120,8 @@ BEGIN
         WHERE severity = N'Error';
         THROW @number, @message, 1;
     END
+    IF @throwonly = 1
+        RETURN;
 
     INSERT INTO #items (action, physicaltable, [table], layer)
     SELECT N'CreateTable', physicaltable, [table], layer

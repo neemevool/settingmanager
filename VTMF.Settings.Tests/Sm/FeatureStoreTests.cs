@@ -207,6 +207,32 @@ public sealed class FeatureStoreTests(SqlServerFixture fixture)
     }
 
     [Fact]
+    public async Task SaveFeature_PositionParam_RoundTrips()
+    {
+        var name = UniqueName();
+        var saved = await fixture.FeatureStore.SaveFeatureAsync(new SmFeature
+        {
+            Name = name,
+            Description = "Adds a barcode column",
+            Rows =
+            [
+                new SmFeatureRow { Table = "DocumentListLayout", Name = "Column", Value = "BARCODE", SettingType = "SettingGroup", After = "{{pos}}" },
+                new SmFeatureRow { Table = "DocumentListLayout", Name = "Column.BARCODE.Caption", Value = "Barcode" },
+            ],
+            Params = [new SmFeatureParam { Name = "pos", Description = "After which column should the barcode column be shown? (or first)", Type = "Position" }],
+        }, null);
+        await fixture.FeatureStore.SetFeatureStatusAsync(saved.Id, "Finished", saved.Revision);
+
+        var feature = await fixture.FeatureStore.GetFeatureAsync(saved.Id, null);
+
+        Assert.Equal("Finished", feature.Status);
+        var param = Assert.Single(feature.Params);
+        Assert.Equal("Position", param.Type);
+        Assert.Null(param.Default);
+        Assert.Equal("{{pos}}", feature.Rows[0].After);
+    }
+
+    [Fact]
     public async Task Delete_Draft_Removes()
     {
         var (id, revision) = await SaveNewAsync(UniqueName());

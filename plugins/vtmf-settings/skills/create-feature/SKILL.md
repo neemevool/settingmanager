@@ -37,10 +37,14 @@ The author is a developer or a consultant who knows the code behaviour. All tool
 4. **Rows, iteratively.** The user names settings to add, change or remove per table; or, from a session, propose the net changes as rows and let the user trim them:
    - item with an after-image (Insert / Update) → row `op: "set"` with the new `value`;
    - deleted row (Delete) → row `op: "remove"` (`value` omitted);
+   - inserted group row (e.g. a new column) → `set` row with a Position parameter (see below); the settings under it are ordinary rows;
+   - ordernr-only updates (a moved column, a tidy) → not feature rows (features have no ordernr): do not record them, but mention them to the author;
    - `CreateTable` → no row; add a row `note` (or tell the author) that the table is created at apply time only with the consultant's consent;
    - `ServerSetting` rows → leave out and say why.
 
-   Translate physical tables to table kinds and layers: `table` = view suffix without the process name (`spaorderassemblingDocumentLayout` → `DocumentLayout`, `ProcessSettings`, `ServerProcessSettings`, …); `layer` = `base`, `env:{E}` or `lang:{L}`. A feature is not tied to a process: frontend rows work on any process; only `ServerProcessSettings` rows need support in the target process code. Use `settingtype: "SettingGroup"` for group rows (e.g. `Column`), `after` (`NAME` or `NAME=VALUE`) when the position matters; rows have no `ordernr`.
+   Translate physical tables to table kinds and layers: `table` = view suffix without the process name (`spaorderassemblingDocumentLayout` → `DocumentLayout`, `ProcessSettings`, `ServerProcessSettings`, …); `layer` = `base`, `env:{E}` or `lang:{L}`. A feature is not tied to a process: frontend rows work on any process; only `ServerProcessSettings` rows need support in the target process code. Use `settingtype: "SettingGroup"` for group rows (e.g. `Column`); rows have no `ordernr`.
+
+   **Where a new column goes.** When a `set` row has `settingtype: "SettingGroup"`, add a **Position** parameter (`type: "Position"`) automatically, use it as that row's whole `after` (`after: "{{position}}"`) and propose its question to the author ("After which column should the barcode column be shown? (or first)"; no default, no values). Tell the author the tool places the whole column with its settings, so the settings under it need no `after`. Several new columns in one feature: chain them (the next one's `after` names a group row from an earlier row of the feature, never a later one: `Column={{name}}`, or `Detail.{{name}}` for `Detail.*` groups) or ask one Position question for each. A Position parameter works only as the whole `after` of a group row. A feature that adds a column without this cannot be finished.
 
    **Save after every change.** `save_feature` replaces the whole feature: always send the complete document (every row, parameter and step) with `id` and the **last** `revision` you got. "Show the current state" → `get_feature(id)`, rendered as a short table:
 
@@ -58,7 +62,8 @@ The author is a developer or a consultant who knows the code behaviour. All tool
    For each parameter: a question in plain words (`description`), a `type`, an optional `default`, and for List the values with descriptions:
    - `Text` (an empty answer is valid), `Number`;
    - `Boolean` — stored as the text `True` / `False`; the consultant answers yes/no;
-   - `List` — at least one value; each `{ value, description }`.
+   - `List` — at least one value; each `{ value, description }`;
+   - `Position` — only as the whole `after` of a `set` group row (see "Where a new column goes"); no default, no values; the consultant answers a column of the target table or "first".
 
    A parameter without a default must be answered at apply time. Save. `PARAM_UNUSED` in the warnings → a parameter no row or step uses: remove it or use it.
 6. **Post-apply steps.** Ask about work outside settings tables (Directo hooks in `dcquerysettings`, scanner profiles, other records) and important guidance for the consultant. Each step: `text` (required guidance) and optional `sql`. Help write SQL that is **idempotent**, guarded with `IF NOT EXISTS` (pattern of the existing `065-script-PostSetBarcodeQuery.txt`), e.g.:
@@ -69,7 +74,7 @@ The author is a developer or a consultant who knows the code behaviour. All tool
    ```
 
    Placeholders are allowed in steps and are filled at apply time. Save.
-7. **Finish.** When the author is satisfied: `set_feature_status(id, status: "Finished", revision)`. On `feature_invalid`, explain the refusal in plain words (missing description, a placeholder without a described parameter, a parameter or List value without a description, an invalid default, no rows and no steps) and fix it with the author, save, and finish again. Only now can consultants find and apply it.
+7. **Finish.** When the author is satisfied: `set_feature_status(id, status: "Finished", revision)`. On `feature_invalid`, explain the refusal in plain words (missing description, a placeholder without a described parameter, a parameter or List value without a description, an invalid default, a new column without a question about where it goes, no rows and no steps) and fix it with the author, save, and finish again. Only now can consultants find and apply it.
 8. **Complexity rule.** If something needs conditions, branching or per-option row groups, **don't model it**. Write it as step guidance, or suggest a separate complementary feature described in free form.
 9. **Editing a Finished feature.** Small fixes: `save_feature` with the full document; a save that would make it invalid is refused (`feature_invalid`). Bigger changes: reopen with `set_feature_status(id, status: "Draft", revision)`, edit, finish again. No versioning: the feature is changed in place; customers get the fix by applying it again (only differences appear in the plan). Rows removed from the feature are not removed from customers unless the feature has an explicit remove row.
 10. **Delete** only drafts and only after the user asks: `delete_feature(id, revision)`. A Finished feature must be reopened first. Settings already applied are not touched.

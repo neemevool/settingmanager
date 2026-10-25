@@ -68,6 +68,13 @@ public static class SmFeatureExpander
                 continue;
             }
 
+            // A Position answer is a column name or "first"; blank means not answered (existence is checked by the plan).
+            if (param.Type == "Position" && string.IsNullOrWhiteSpace(raw))
+            {
+                missing.Add(param.Name);
+                continue;
+            }
+
             var error = Normalize(param, raw, out var normalized);
             if (error is not null)
             {
@@ -91,6 +98,35 @@ public static class SmFeatureExpander
         string Sub(string text) => FeaturePlaceholders.Substitute(text, values);
         string? SubOrNull(string? text) => text is null ? null : Sub(text);
 
+        // An after that is exactly one Position placeholder becomes a group anchor: "^" for first, otherwise the
+        // sibling group's key (NAME=answer, or family.answer for name-keyed Detail.* groups).
+        string? PositionAfter(SmFeatureRow row)
+        {
+            var name = SmFeatureValidator.WholePlaceholder(row.After);
+            var param = name is null
+                ? null
+                : feature.Params.FirstOrDefault(p => p.Type == "Position" && string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (param is null)
+            {
+                return null;
+            }
+
+            var answer = values[param.Name];
+            if (answer.Equals("first", StringComparison.OrdinalIgnoreCase))
+            {
+                return "^";
+            }
+
+            var groupName = Sub(row.Name);
+            if (!SmFeatureValidator.IsNameKeyedGroup(groupName))
+            {
+                return $"{groupName}={answer}";
+            }
+
+            var family = groupName[..groupName.LastIndexOf('.')];
+            return $"{family}.{answer}";
+        }
+
         var rows = feature.Rows.Select(row => new SmDesiredRow
         {
             Table = row.Table,
@@ -99,7 +135,7 @@ public static class SmFeatureExpander
             Value = SubOrNull(row.Value),
             SettingType = row.SettingType,
             ListValue = SubOrNull(row.ListValue),
-            After = SubOrNull(row.After),
+            After = PositionAfter(row) ?? SubOrNull(row.After),
             Op = row.Op == "remove" ? "remove" : "upsert",
             OrderNr = null,
         }).ToList();
@@ -146,6 +182,9 @@ public static class SmFeatureExpander
                 }
 
                 return $"Parameter '{param.Name}' must be one of: {string.Join(", ", param.Values.Select(v => v.Value))}; got '{raw}'.";
+            case "Position":
+                normalized = raw.Trim();
+                return null;
             default:
                 return null;
         }

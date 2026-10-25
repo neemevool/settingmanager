@@ -7,10 +7,26 @@ namespace VTMF.Settings.Tests.Sm;
 /// <summary>Creates throwaway processes and tables in a test client for plan-engine tests.</summary>
 internal static class PlanSandbox
 {
+    private const string TableColumns = "NAME nvarchar(200) NOT NULL, VALUE nvarchar(400) NOT NULL, settingtype nvarchar(20) NOT NULL, LISTVALUE nvarchar(1600) NULL, workercode nvarchar(100) NOT NULL, ordernr int NOT NULL";
+
+    /// <summary>Creates an extra settings table (env or lang overlay) with the given rows, all with <paramref name="workercode"/>.</summary>
+    public static async Task CreateLayerTableAsync(SqlServerFixture f, string client, string physicalTable, string workercode,
+        params (string Name, string Value, string SettingType, int OrderNr)[] rows)
+    {
+        var values = string.Join(",\n", rows.Select(r =>
+            $"(N'{Esc(r.Name)}', N'{Esc(r.Value)}', N'{Esc(r.SettingType)}', NULL, N'{Esc(workercode)}', {r.OrderNr})"));
+        var insert = rows.Length == 0
+            ? string.Empty
+            : $"INSERT INTO dbo.{QuoteName(physicalTable)} (NAME, VALUE, settingtype, LISTVALUE, workercode, ordernr) VALUES {values};";
+        await ExecAsync(f, client, $"CREATE TABLE dbo.{QuoteName(physicalTable)} ({TableColumns});\n{insert}");
+
+        static string Esc(string s) => s.Replace("'", "''", StringComparison.Ordinal);
+    }
+
     public static async Task<string> CreateProcessAsync(SqlServerFixture f, string client, string? process = null, string? settingProcedures = null)
     {
         var p = process ?? "pl" + Guid.NewGuid().ToString("N")[..8];
-        const string template = "NAME nvarchar(200) NOT NULL, VALUE nvarchar(400) NOT NULL, settingtype nvarchar(20) NOT NULL, LISTVALUE nvarchar(1600) NULL, workercode nvarchar(100) NOT NULL, ordernr int NOT NULL";
+        const string template = TableColumns;
 
         await ExecAsync(f, client, $"""
             INSERT INTO dbo.processtypes (NAME, DISPLAYLABEL, TAG, PROCESSTYPE, DATAPROCEDURES, SETTINGPROCEDURES, ENVIRONMENT, ORDERNR)

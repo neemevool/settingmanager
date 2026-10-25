@@ -52,8 +52,20 @@ All tools return `{ ok, data, error: { code, message } }`. Reply in the user's l
 ```
 
 - Actions in words: Insert → Add, Update → Change, Delete → Remove, CreateTable → New table, BackupTable → Back up table, DropTable → Remove table. Renumber-only updates (same value, other position) → "Move" with `#old → #new` position.
+- A moved column (or a tidy) touches many rows: show **one line per column** — "Move column X after Y" (or "first") — not one line per row. A removed column lists its rows; say "removes column X with its N settings, including translations".
 - `ServerSetting` rows never appear with values; if a renumber touches one, show it only as "Move" without values.
-- Below the table, warnings in plain words (no codes): `OVERRIDE_PROC` the terminal reads this view from a procedure, so the table change may not show · `LEGACY_ENV` an old-style environment row also exists · `ALIAS_TARGET` this process shares settings with another one (change affects both) · `ROW_NOT_FOUND` a row to remove does not exist (nothing to do for it) · `ANCHOR_NOT_FOUND` the "after" row was not found, the new row goes next to similar names or at the end · `RENUMBER` other rows move to make room · `CREATE_TABLE` a new table will be created · `LEGACY_CONFLICT` legacy row left in place because the overlay differs · `STALE` (on a stale plan in `get_plan`) settings changed after the preview.
+- Below the table, warnings in plain words (no codes): `OVERRIDE_PROC` the terminal reads this view from a procedure, so the table change may not show · `LEGACY_ENV` an old-style environment row also exists · `ALIAS_TARGET` this process shares settings with another one (change affects both) · `ROW_NOT_FOUND` a row to remove does not exist (nothing to do for it) · `ANCHOR_NOT_FOUND` the "after" row was not found, the new row goes next to similar names or at the end · `RENUMBER` other rows move to make room · `GROUP_NOT_MOVED` the column already exists, so it stays where it is (offer to move it) · `ANCHOR_OUTSIDE_GROUP` the "after" setting is not inside this column, so the new setting goes to the end of the column · `SPLIT_GROUP` this table has columns whose settings are scattered; offer to tidy it first (`renumber_plan`), then continue · `ORPHAN_ROWS` some settings belong to a column that no longer exists and are put last; name them and offer to remove them · `CREATE_TABLE` a new table will be created · `LEGACY_CONFLICT` legacy row left in place because the overlay differs · `STALE` (on a stale plan in `get_plan`) settings changed after the preview.
+
+## Columns and groups
+
+A group (`settingtype: "SettingGroup"`, e.g. a layout column `Column=DOCNR`) is a **block**: the group row plus the settings under it (`Column.DOCNR.Caption`, `.Width`, …). The tools place, move and remove the whole block; you only name the column. Users say "column"; its VALUE is the column name.
+
+- **Add** "add column X after Y / first": `upsert` the group row and its settings; `after: "Column=Y"` on the group row (`after: "^"` for first). The settings under the column need no `after`. Several new columns: list them in the order wanted and chain them: each later one uses the previous new one as its `after`. Several new columns first: give only the first one `after: "^"` and chain the rest after it (several `"^"` rows would end up in reverse order).
+- **Move** "move column X after Y / first": one row `{ op: "move", settingtype: "SettingGroup", name: "Column", value: "X", after: "Column=Y" }` (`"^"` for first). Not for `ServerProcessSettings`, not in replace mode. If X already exists, a plain upsert does **not** move it.
+- **Remove** "remove column X": `op: "remove"` on the group row removes the whole block, including its translations. Say how many settings go with it (count the Remove lines of the preview) before asking to confirm. Do not change or move that column in the same plan.
+- **Tidy** "tidy / renumber this table": `renumber_plan(client, process, table, layer, sessionId)` (an own table of the process, not a shared alias table; not `ServerProcessSettings`). It gathers each column's settings together and renumbers 10, 20, 30…; only rows whose position changes appear. `NoChanges` → already tidy. Preview, confirm, apply as always.
+- **Which columns exist:** `get_settings` on the **same table and layer** the column goes into; list the group rows of that kind by VALUE (for `Detail.*` groups the name after `Detail.`, e.g. `Lines`). On an environment layer the terminal shows that environment's own columns after all base columns, and only that layer's own columns can be "after".
+- If the user did not say where, ask ("After which column? Or first?"); never pick for them.
 
 ## Desired-state cheat sheet
 
@@ -64,11 +76,11 @@ All tools return `{ ok, data, error: { code, message } }`. Reply in the user's l
 ```
 
 - **mode**: `merge` for "change / add / remove these" (only listed rows touched). `replace` only when the user wants a table/layer to become exactly this content: `scope` lists the replaced `{table, layer}`s, unlisted rows there are deleted, every row needs `ordernr`.
-- **op**: `upsert` (default; `value` required) or `remove` (merge only — in replace mode just leave the row out).
+- **op**: `upsert` (default; `value` required), `remove` (merge only — in replace mode just leave the row out) or `move` (merge only; see Columns and groups).
 - **table**: view suffix (`ProcessSettings`, `DocumentListLayout`, `ServerProcessSettings`, …).
 - **layer**: `base` unless the user talks about one environment (`env:{E}`) or language (`lang:{L}`). Never worker codes — not accepted.
 - **settingtype**: `Setting` (default; one row per NAME) or `SettingGroup` (several rows share a NAME, the VALUE tells them apart, e.g. `Column=DOCNR`; names starting with `Detail.` are keyed by NAME only). To change a group row's VALUE, `remove` the old and `upsert` the new.
-- **after**: place a new row after an existing one: `NAME`, or `NAME=VALUE` for group rows. Omitted → placed after the row with the most similar dotted name, else appended (or give `ordernr`).
+- **after**: place a new row after an existing one: `NAME`, or `NAME=VALUE` for group rows. For a group row it names a sibling group (`Column=DOCNR`, `Detail.Lines`) or `^` for first; omitted → after the last group of its kind. For other rows omitted → placed after the row with the most similar dotted name, else appended (or give `ordernr`). Never give `ordernr` on a group row (use `after` or `move`).
 - **options** (ask first, explain the consequence): `createTable` creates a missing table or env/lang overlay table; `targetAlias` writes to settings shared with another process. Not both at once.
 
 ## Errors and statuses
@@ -78,6 +90,11 @@ All tools return `{ ok, data, error: { code, message } }`. Reply in the user's l
 | `Stale` (apply) | Nothing changed. Show conflicts, re-read, rebuild, re-preview, ask again. Never partial (step 7/8). |
 | `Failed` (apply) | Nothing changed (rolled back as a whole). Report `message`; do not retry blindly. |
 | `invalid_desired` | Your desired state is wrong (missing value, remove in replace, missing ordernr, both options…). Fix it yourself and re-create. |
+| `group_anchor_not_found` | The "after" column does not exist in this table (this customer and layer). Say so, list the columns that do exist (`get_settings`) plus "first", ask which; re-create. Never guess. |
+| `group_anchor_invalid` | The "after" is not a column of the same kind (or is the column itself or one of its own settings). Offer the valid columns. |
+| `group_not_found` | The column to move does not exist here. Show the existing columns; if the user meant a new column, add it instead. |
+| `group_ordernr` | A column cannot be given a position number. Use "after" or move; fix it yourself and re-create. |
+| `group_remove_conflict` | The same plan removes a column and also changes or moves it. Ask what is wanted; use separate plans. |
 | `duplicate_row` | The table holds two rows that should be one (invalid data). Name them; they must be cleaned up first (UI/developer). Do not work around it. |
 | `serversetting` | The change would touch a `ServerSetting` row; those cannot be changed here. |
 | `worker_layer` | Worker-level rows are not written. Offer the environment or language layer. |

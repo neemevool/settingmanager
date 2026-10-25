@@ -43,8 +43,10 @@ public sealed class SettingsFeatureTools(SmFeatureStore features, SmFeatureInsta
     [McpServerTool(Name = "save_feature", ReadOnly = false, Destructive = false)]
     [Description("Creates a feature (no id; saved as Draft) or replaces an existing one: the whole feature is replaced, so pass every row, parameter and step, and the last revision. " +
         "The description must say what the feature enables for the end user, not how it is built. " +
-        "Feature fields: name, description, builtOnProcess, rows [{ table, layer, name, value, settingtype: Setting|SettingGroup, listvalue, op: set|remove, after, note }], params [{ name, description, type: Text|Number|Boolean|List, default, values: [{ value, description }] }], steps [{ text, sql }]. " +
+        "Feature fields: name, description, builtOnProcess, rows [{ table, layer, name, value, settingtype: Setting|SettingGroup, listvalue, op: set|remove, after, note }], params [{ name, description, type: Text|Number|Boolean|List|Position, default, values: [{ value, description }] }], steps [{ text, sql }]. " +
         "Use {{param}} placeholders in row values; {{processname}} and {{clientname}} are built in. Steps are manual follow-up work; step sql is shown to the user and never executed. " +
+        "A row that adds a group (op set, settingtype SettingGroup, e.g. a layout column) is placed as a whole block; its children need no after. Give it after \"{{position}}\" with a Position parameter whose description is the question (\"After which column should the barcode column be shown? (or first)\"); the answer is an existing column name (DOCNR, never Column=DOCNR) or first. " +
+        "A Position parameter has no default and no values and may only be the whole after of such a group row. A second new group may instead use after naming a group row added in an EARLIER row of the same feature (Column={{name}}, or Detail.{{name}} for Detail.* groups; rows are placed in order). " +
         "Returns id, the new revision and warnings (for example PARAM_UNUSED). Finish the feature with set_feature_status before planning it.")]
     public Task<ToolResult<SmFeatureSaveResult>> SaveFeature(
         [Description("The complete feature document.")] SmFeature feature,
@@ -53,7 +55,7 @@ public sealed class SettingsFeatureTools(SmFeatureStore features, SmFeatureInsta
         ToolResult.RunAsync(() => features.SaveFeatureAsync(feature, revision, cancellationToken));
 
     [McpServerTool(Name = "set_feature_status", ReadOnly = false, Destructive = false)]
-    [Description("Sets a feature to Finished (validated: needs a description, parameter descriptions and consistent placeholders) or back to Draft. Only Finished features can be planned. Returns the new revision and warnings.")]
+    [Description("Sets a feature to Finished (validated: needs a description, parameter descriptions and consistent placeholders; every set SettingGroup row needs an after that is a Position parameter or names a group row in an earlier row of the same feature, so the consultant is asked where the column goes) or back to Draft. Only Finished features can be planned. Returns the new revision and warnings.")]
     public Task<ToolResult<SmFeatureSaveResult>> SetFeatureStatus(
         [Description("Feature id.")] int id,
         [Description("Draft or Finished.")] string status,
@@ -75,6 +77,8 @@ public sealed class SettingsFeatureTools(SmFeatureStore features, SmFeatureInsta
 
     [McpServerTool(Name = "feature_plan", ReadOnly = false, Destructive = false)]
     [Description("Stores a plan that applies a Finished feature to one process and changes no settings: drafts are refused with feature_not_finished. Ask the user for every parameter without a default (a missing one fails with feature_param_missing). " +
+        "For a Position parameter ask the parameter's question (\"after which column … (or first)\"), offering the target table's existing columns of that kind plus first; pass the column name (DOCNR) or first. A column that does not exist fails with group_anchor_not_found: re-ask, never pick a position yourself. If the group already exists the answer is ignored (warning GROUP_NOT_MOVED). " +
+        "A Finished feature that adds a group without a position question fails with feature_needs_position: it must be reopened with create-feature. " +
         "Show the plan items, warnings (for example SETTING_NOT_READ: the process code does not read a server setting the feature sets) and steps to the user, and call apply_plan only after the user confirms. " +
         "The result also lists the manual steps: show their sql to the user to run; the assistant never executes step sql. Fails with session_closed if the session is closed.")]
     public Task<ToolResult<SmFeaturePlanResult>> FeaturePlan(

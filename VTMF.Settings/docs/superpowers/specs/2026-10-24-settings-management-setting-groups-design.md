@@ -101,14 +101,17 @@ base groups and ignores group rows in lang tables (`sm.GetEffectiveSettings`); t
   (`Detail.Lines`). Same rule as `idkey` / `path` today (a group named exactly `Detail` is keyed by NAME+VALUE).
 - **Children**: rows whose path starts with group path + `.`. Groups never nest (G13): a child is never a group row.
   *(Builder's note: if real data has a group row under another group's path, treat it as a child of the outer block,
-  not as a nested group.)*
+  not as a nested group.)* A group row is never a child of a sibling with the same NAME (`Column=A.B` is its own block
+  next to `Column=A`), and a row under several group paths belongs to the longest one (`Column.A.B.Caption` belongs to
+  `Column=A.B`). *(Final review ruling F6.)*
 - **Block**: the group row plus its children.
 - **Sort key**: (ordernr, NAME, VALUE) — matches the terminal, which orders equal ordernr by NAME (G14). Sibling
   group rows that share NAME and ordernr (`Column=A` and `Column=B` both at 0) have no defined terminal order: the
   engine never creates such ties (placed and moved rows always get an ordernr strictly between their neighbours,
   renumbering when there is no room), and the renumber plan removes existing ones.
-- **Family** of a group: its group path without the last segment (`Column` for `Column.DOCNR`, `Detail` for
-  `Detail.Lines`). Groups of the same family are siblings: "after which column" picks among them.
+- **Family** of a group: its NAME for a value-keyed group (`Column` for `Column.DOCNR`, also for `Column=Item.Code`), its
+  NAME without the last segment for a name-keyed group (`Detail` for `Detail.Lines`).
+  Groups of the same family are siblings: "after which column" picks among them.
 - **Block position**: the block sits at its group row (that is what the terminal orders by). Block end = the last row
   of the block by sort key (ordernr, NAME, VALUE).
 - **Split block**: a block whose rows are not contiguous by sort key (a child sorts before the group row, or a row that

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "vtmf-settings": {
+      "type": "http",
+      "url": "${VTMF_SETTINGS_MCP_URL:-http://localhost:8081/mcp}"
+    }
+  }
+}

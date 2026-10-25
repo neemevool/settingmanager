@@ -1,0 +1,278 @@
+/*
+  sm.CreateRenumberPlan: tidies one settings table (process, table, layer) so every SettingGroup block is contiguous,
+  and stores the result as a plan (source 'renumber', mode merge, desired NULL). Spec 2026-10-24 setting groups, §6.
+  Returns the same result sets as sm.CreatePlan: (1) planid, checksum, status (Created | NoChanges | DryRun),
+  (2) items, (3) warnings. Temp tables: see 129-procedure-CreatePlan.txt (#desired stays empty).
+
+  Final order (sort key ordernr, NAME, VALUE; block rule sm.GroupBlocks, as in sm.PlanOrder: a row belongs to the
+  block of the group row with the longest path such that path + '.' starts the row's path; a group row under the path
+  of a group with another NAME is a child, never one under a sibling with the same NAME (Column=A.B is its own block)):
+    1. Walk the rows in sort-key order.
+    2. A group row emits its whole block there: the group row, then its children in sort-key order (a child that
+       sorted before its group row moves to its block). Sibling group rows tied on ordernr and NAME come in VALUE order.
+    3. Plain rows keep their place relative to each other and to the blocks.
+    4. Orphan children (not in a block, but the path starts with F + '.' where F is the family of a block head in the
+       table) go last in sort-key order; warning ORPHAN_ROWS names them.
+    5. Ordernr 10, 20, 30...
+  Only rows whose ordernr changes get an ordernr-only Update item (same values; ServerSetting rows carry NULL values
+  as loaded in #current, sm.ApplyPlan sets only ordernr). A tidy table gives NoChanges.
+  Errors: process 51003; invalid input or ServerProcessSettings (no ordering) 51006; layer 51002 / 51008; missing
+  table 51010 (alias table 51009); duplicate identities anywhere in the table 51011 (DUPLICATE_ROW: every row may be
+  renumbered); session 51012 / 51013.
+*/
+CREATE OR ALTER PROCEDURE sm.CreateRenumberPlan
+    @process     nvarchar(100),
+    @table       nvarchar(100),
+    @layer       nvarchar(110),
+    @description nvarchar(400),
+    @sessionid   int = NULL,
+    @dryrun      bit = 0
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SET XACT_ABORT ON;
+
+    IF @sessionid IS NOT NULL
+    BEGIN
+        DECLARE @sessionstatus nvarchar(10) = (SELECT status FROM sm.session WHERE id = @sessionid);
+        IF @sessionstatus IS NULL
+            THROW 51012, N'Session not found.', 1;
+        IF @sessionstatus = N'Closed'
+            THROW 51013, N'The session is closed; start a new session to create plans.', 1;
+    END
+
+    SET @layer = ISNULL(@layer, N'base');
+
+    IF @process IS NULL OR LEN(@process) = 0 OR sm.IsSafeName(@process) = 0
+        THROW 51006, N'Invalid renumber request: invalid process name.', 1;
+    IF NOT EXISTS (SELECT 1 FROM dbo.processtypes WHERE NAME = @process)
+        THROW 51003, N'Process not found.', 1;
+    IF @table IS NULL OR sm.IsSafeName(@table) = 0
+        THROW 51006, N'Invalid renumber request: missing or invalid table name.', 1;
+    IF @table = N'ServerProcessSettings'
+        THROW 51006, N'Invalid renumber request: ServerProcessSettings has no ordering and cannot be renumbered.', 1;
+
+    CREATE TABLE #desired
+    (
+        rowno         int            NOT NULL,
+        [table]       nvarchar(100)  COLLATE DATABASE_DEFAULT NOT NULL,
+        layer         nvarchar(110)  COLLATE DATABASE_DEFAULT NOT NULL,
+        apiname       nvarchar(200)  COLLATE DATABASE_DEFAULT NOT NULL,
+        name          nvarchar(200)  COLLATE DATABASE_DEFAULT NULL,
+        value         nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+        settingtype   nvarchar(20)   COLLATE DATABASE_DEFAULT NOT NULL,
+        listvalue     nvarchar(1600) COLLATE DATABASE_DEFAULT NULL,
+        ordernr       int            NULL,
+        op            nvarchar(10)   COLLATE DATABASE_DEFAULT NOT NULL,
+        after         nvarchar(1000) COLLATE DATABASE_DEFAULT NULL,
+        physicaltable sysname        COLLATE DATABASE_DEFAULT NULL,
+        workercode    nvarchar(100)  COLLATE DATABASE_DEFAULT NULL,
+        idkey AS CONCAT(physicaltable, NCHAR(1), workercode, NCHAR(1), name, NCHAR(1),
+                        CASE WHEN settingtype = N'SettingGroup' AND LEFT(name, 7) <> N'Detail.' THEN N'V' + value ELSE N'-' END)
+    );
+
+    CREATE TABLE #scope
+    (
+        [table]       nvarchar(100) COLLATE DATABASE_DEFAULT NOT NULL,
+        layer         nvarchar(110) COLLATE DATABASE_DEFAULT NOT NULL,
+        replacescope  bit           NOT NULL,
+        kind          nvarchar(10)  COLLATE DATABASE_DEFAULT NULL,
+        physicaltable sysname       COLLATE DATABASE_DEFAULT NULL,
+        workercode    nvarchar(100) COLLATE DATABASE_DEFAULT NULL,
+        tableexists   bit           NULL,
+        aliasof       nvarchar(100) COLLATE DATABASE_DEFAULT NULL
+    );
+
+    CREATE TABLE #current
+    (
+        physicaltable sysname        COLLATE DATABASE_DEFAULT NOT NULL,
+        workercode    nvarchar(100)  COLLATE DATABASE_DEFAULT NOT NULL,
+        [table]       nvarchar(100)  COLLATE DATABASE_DEFAULT NOT NULL,
+        layer         nvarchar(110)  COLLATE DATABASE_DEFAULT NOT NULL,
+        name          nvarchar(200)  COLLATE DATABASE_DEFAULT NOT NULL,
+        value         nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+        settingtype   nvarchar(20)   COLLATE DATABASE_DEFAULT NOT NULL,
+        listvalue     nvarchar(1600) COLLATE DATABASE_DEFAULT NULL,
+        ordernr       int            NOT NULL,
+        idkey AS CONCAT(physicaltable, NCHAR(1), workercode, NCHAR(1), name, NCHAR(1),
+                        CASE WHEN settingtype = N'SettingGroup' AND LEFT(name, 7) <> N'Detail.' THEN N'V' + value ELSE N'-' END)
+    );
+
+    CREATE TABLE #items
+    (
+        seq            int            NULL,
+        action         nvarchar(12)   COLLATE DATABASE_DEFAULT NOT NULL,
+        physicaltable  sysname        COLLATE DATABASE_DEFAULT NOT NULL,
+        [table]        nvarchar(100)  COLLATE DATABASE_DEFAULT NOT NULL,
+        layer          nvarchar(110)  COLLATE DATABASE_DEFAULT NOT NULL,
+        workercode     nvarchar(100)  COLLATE DATABASE_DEFAULT NULL,
+        name           nvarchar(200)  COLLATE DATABASE_DEFAULT NULL,
+        value          nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+        settingtype    nvarchar(20)   COLLATE DATABASE_DEFAULT NULL,
+        listvalue      nvarchar(1600) COLLATE DATABASE_DEFAULT NULL,
+        ordernr        int            NULL,
+        oldvalue       nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+        oldsettingtype nvarchar(20)   COLLATE DATABASE_DEFAULT NULL,
+        oldlistvalue   nvarchar(1600) COLLATE DATABASE_DEFAULT NULL,
+        oldordernr     int            NULL,
+        backuptable    sysname        COLLATE DATABASE_DEFAULT NULL
+    );
+
+    CREATE TABLE #warnings
+    (
+        seq      int IDENTITY(1,1) NOT NULL,
+        severity nvarchar(10)   COLLATE DATABASE_DEFAULT NOT NULL,
+        code     nvarchar(30)   COLLATE DATABASE_DEFAULT NOT NULL,
+        message  nvarchar(1000) COLLATE DATABASE_DEFAULT NOT NULL
+    );
+
+    -- One (table, layer) and no desired rows: sm.PlanResolve validates the layer and resolves the physical table,
+    -- sm.PlanGuardrails reports a missing table (TABLE_MISSING / ALIAS_TARGET) and the usual table warnings.
+    INSERT INTO #scope ([table], layer, replacescope) VALUES (@table, @layer, 0);
+
+    EXEC sm.PlanResolve @process = @process, @mode = N'merge', @targetAlias = 0;
+    EXEC sm.PlanLoadCurrent @process = @process;
+    EXEC sm.PlanGuardrails @process = @process, @createTable = 0;
+
+    -- Every row of the table may be renumbered: duplicate identities anywhere refuse the plan (as in sm.PlanOrder;
+    -- never a ServerSetting value in the message).
+    WITH dup AS
+    (
+        SELECT c.idkey, MIN(c.physicaltable) AS physicaltable, MIN(c.workercode) AS workercode, MIN(c.name) AS name,
+               MIN(c.value) AS value, MIN(c.settingtype) AS settingtype, MAX(c.settingtype) AS maxsettingtype,
+               COUNT(*) AS n
+        FROM #current AS c
+        GROUP BY c.idkey
+        HAVING COUNT(*) > 1
+    )
+    INSERT INTO #warnings (severity, code, message)
+    SELECT N'Error', N'DUPLICATE_ROW',
+           LEFT(CONCAT(N'Duplicate rows in ', physicaltable, N' (workercode ', workercode, N'): NAME ', name,
+                       CASE WHEN settingtype = N'SettingGroup' AND maxsettingtype = N'SettingGroup' AND LEFT(name, 7) <> N'Detail.'
+                            THEN N' VALUE ' + value END,
+                       N' occurs ', n, N' times; renumbering changes the ordernr of every row of this table.',
+                       N' Clean up the duplicates before renumbering this table.'), 1000)
+    FROM dup
+    ORDER BY physicaltable, workercode, name, value;
+
+    EXEC sm.PlanGuardrails @process = NULL, @throwonly = 1;
+
+    -- Rows with path, block (sm.GroupPath / sm.GroupBlocks: the same rule as sm.PlanOrder and the SPLIT_GROUP check
+    -- in sm.PlanDiff) and sort rank (rn).
+    CREATE TABLE #groupblocks
+    (
+        id          int            NOT NULL PRIMARY KEY,
+        part        nvarchar(400)  COLLATE DATABASE_DEFAULT NOT NULL,
+        name        nvarchar(200)  COLLATE DATABASE_DEFAULT NOT NULL,
+        value       nvarchar(400)  COLLATE DATABASE_DEFAULT NULL,
+        settingtype nvarchar(20)   COLLATE DATABASE_DEFAULT NOT NULL,
+        canhead     bit            NOT NULL,
+        path        nvarchar(1000) COLLATE DATABASE_DEFAULT NULL,
+        family      nvarchar(1000) COLLATE DATABASE_DEFAULT NULL,
+        ishead      bit            NULL,
+        blockkey    nvarchar(1000) COLLATE DATABASE_DEFAULT NULL
+    );
+
+    SELECT IDENTITY(int, 1, 1) AS id, c.physicaltable, c.workercode, c.[table], c.layer, c.name, c.value, c.settingtype,
+           c.listvalue, c.ordernr
+    INTO #rn0
+    FROM #current AS c
+    ORDER BY c.ordernr, c.name, c.value;
+
+    INSERT INTO #groupblocks (id, part, name, value, settingtype, canhead)
+    SELECT id, CONCAT(physicaltable, NCHAR(1), workercode), name, value, settingtype, 1
+    FROM #rn0;
+
+    EXEC sm.GroupBlocks;
+
+    SELECT o.id, o.physicaltable, o.workercode, o.[table], o.layer, o.name, o.value, o.settingtype, o.listvalue,
+           o.ordernr, b.path, b.blockkey, b.family, CONVERT(int, b.ishead) AS ishead,
+           ROW_NUMBER() OVER (ORDER BY o.ordernr, o.name, o.value, o.id) AS rn
+    INTO #rn1
+    FROM #rn0 AS o
+    JOIN #groupblocks AS b ON b.id = o.id;
+
+    -- Families of the block heads; orphans: rows outside every block under a family.
+    SELECT DISTINCT family
+    INTO #families
+    FROM #rn1
+    WHERE ishead = 1;
+
+    SELECT r.id, r.rn,
+           CASE WHEN r.blockkey IS NULL
+                     AND EXISTS (SELECT 1 FROM #families AS f
+                                 WHERE f.family <> N''
+                                   AND LEFT(r.path, DATALENGTH(f.family + N'.') / 2) = f.family + N'.')
+                THEN 1 ELSE 0 END AS orphan,
+           -- position of the row's block (its group row), or the row itself for plain rows and orphans
+           COALESCE(h.rn, r.rn) AS anchorrn,
+           CASE WHEN r.ishead = 1 OR h.rn IS NULL THEN 0 ELSE 1 END AS inblock
+    INTO #rn2
+    FROM #rn1 AS r
+    OUTER APPLY (SELECT TOP (1) g.rn FROM #rn1 AS g
+                 WHERE r.blockkey IS NOT NULL AND g.ishead = 1 AND g.blockkey = r.blockkey
+                 ORDER BY g.rn) AS h;
+
+    SELECT r.id, 10 * ROW_NUMBER() OVER (ORDER BY x.orphan, x.anchorrn, x.inblock, x.rn) AS newordernr
+    INTO #final
+    FROM #rn1 AS r
+    JOIN #rn2 AS x ON x.id = r.id;
+
+    INSERT INTO #items (action, physicaltable, [table], layer, workercode, name, value, settingtype, listvalue, ordernr,
+                        oldvalue, oldsettingtype, oldlistvalue, oldordernr)
+    SELECT N'Update', r.physicaltable, r.[table], r.layer, r.workercode, r.name, r.value, r.settingtype, r.listvalue,
+           f.newordernr, r.value, r.settingtype, r.listvalue, r.ordernr
+    FROM #rn1 AS r
+    JOIN #final AS f ON f.id = r.id
+    WHERE f.newordernr <> r.ordernr;
+
+    WITH numbered AS
+    (
+        SELECT seq, ROW_NUMBER() OVER (ORDER BY ordernr, name, value) AS rn
+        FROM #items
+    )
+    UPDATE numbered SET seq = rn;
+
+    INSERT INTO #warnings (severity, code, message)
+    SELECT N'Warning', N'ORPHAN_ROWS',
+           LEFT(CONCAT(N'Rows in ', MIN(r.physicaltable), N' (', MIN(r.[table]), N', ', MIN(r.layer),
+                       N') belong to no setting group of their kind and go to the end of the table (they probably',
+                       N' belong to a removed group; consider removing them): ',
+                       STRING_AGG(CONVERT(nvarchar(max), r.name), N', ') WITHIN GROUP (ORDER BY x.rn), N'.'), 1000)
+    FROM #rn1 AS r
+    JOIN #rn2 AS x ON x.id = r.id
+    WHERE x.orphan = 1
+    HAVING COUNT(*) > 0;
+
+    DECLARE @planid int, @checksum char(64), @status nvarchar(12);
+    IF NOT EXISTS (SELECT 1 FROM #items)
+        SET @status = N'NoChanges';
+    ELSE IF ISNULL(@dryrun, 0) = 1
+        SET @status = N'DryRun';
+    ELSE
+    BEGIN
+        EXEC sm.PlanStore
+            @process     = @process,
+            @mode        = N'merge',
+            @description = @description,
+            @source      = N'renumber',
+            @desired     = NULL,
+            @sessionid   = @sessionid,
+            @rollbackof  = NULL,
+            @planid      = @planid OUTPUT,
+            @checksum    = @checksum OUTPUT;
+        SET @status = N'Created';
+    END
+
+    SELECT @planid AS planid, @checksum AS checksum, @status AS status;
+
+    SELECT seq, action, physicaltable, [table], layer, workercode, name, value, settingtype, listvalue, ordernr,
+           oldvalue, oldsettingtype, oldlistvalue, oldordernr, backuptable
+    FROM #items
+    ORDER BY seq;
+
+    SELECT severity, code, message
+    FROM #warnings
+    ORDER BY seq;
+END
+GO

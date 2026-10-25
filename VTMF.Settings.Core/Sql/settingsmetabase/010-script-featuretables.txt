@@ -47,10 +47,25 @@ BEGIN
         name         nvarchar(50)   NOT NULL,
         seq          int            NOT NULL,
         description  nvarchar(1000) NOT NULL CONSTRAINT DF_sm_featureparam_description DEFAULT (N''),
-        type         nvarchar(10)   NOT NULL CONSTRAINT CK_sm_featureparam_type CHECK (type IN (N'Text', N'Number', N'Boolean', N'List')),
+        type         nvarchar(10)   NOT NULL CONSTRAINT CK_sm_featureparam_type CHECK (type IN (N'Text', N'Number', N'Boolean', N'List', N'Position')),
         defaultvalue nvarchar(400)  NULL,
         CONSTRAINT PK_sm_featureparam PRIMARY KEY (featureid, name)
     );
+END
+GO
+
+-- v2: the Position type. Databases installed with v1 have the old CHECK; widen it only when it lacks Position.
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints
+               WHERE parent_object_id = OBJECT_ID(N'sm.featureparam')
+                 AND name = N'CK_sm_featureparam_type'
+                 AND definition LIKE N'%''Position''%')
+BEGIN
+    IF EXISTS (SELECT 1 FROM sys.check_constraints
+               WHERE parent_object_id = OBJECT_ID(N'sm.featureparam') AND name = N'CK_sm_featureparam_type')
+        ALTER TABLE sm.featureparam DROP CONSTRAINT CK_sm_featureparam_type;
+
+    ALTER TABLE sm.featureparam WITH CHECK ADD CONSTRAINT CK_sm_featureparam_type
+        CHECK (type IN (N'Text', N'Number', N'Boolean', N'List', N'Position'));
 END
 GO
 

@@ -204,6 +204,59 @@ public sealed class SettingsPlanToolsTests(SqlServerFixture fixture)
     }
 
     [Fact]
+    public async Task RenumberPlan_SplitTable_ViaTools()
+    {
+        var p = await PlanSandbox.CreateProcessAsync(fixture, Client);
+        await PlanSandbox.ExecAsync(fixture, Client, $"UPDATE dbo.{p}{Table} SET ordernr = 45 WHERE NAME = N'Column.DOCNR.Caption'");
+        var session = (await Tools.StartSession(Client, "tools", p, CancellationToken.None)).Data!;
+
+        var result = await Tools.RenumberPlan(Client, session.Id, p, Table, "base", null, CancellationToken.None);
+
+        Assert.True(result.Ok);
+        Assert.Equal("Created", result.Data!.Status);
+        var item = Assert.Single(result.Data.Items);
+        Assert.Equal("Update", item.Action);
+        Assert.Equal("Column.DOCNR.Caption", item.Name);
+        Assert.Equal(20, item.OrderNr);
+    }
+
+    [Fact]
+    public async Task CreatePlan_MoveGroup_ViaTools()
+    {
+        var p = await PlanSandbox.CreateProcessAsync(fixture, Client);
+        var session = (await Tools.StartSession(Client, "tools", p, CancellationToken.None)).Data!;
+        var desired = new SmDesiredState
+        {
+            Process = p,
+            Mode = "merge",
+            Rows = [new SmDesiredRow { Table = Table, Layer = "base", Name = "Column", Value = "DATE", SettingType = "SettingGroup", Op = "move", After = "^" }],
+        };
+
+        var result = await Tools.CreatePlan(Client, session.Id, desired, "move", null, CancellationToken.None);
+
+        Assert.True(result.Ok);
+        Assert.Equal(2, result.Data!.Items.Count(i => i.Action == "Update"));
+    }
+
+    [Fact]
+    public async Task CreatePlan_MissingGroupAnchor_CodedError()
+    {
+        var p = await PlanSandbox.CreateProcessAsync(fixture, Client);
+        var session = (await Tools.StartSession(Client, "tools", p, CancellationToken.None)).Data!;
+        var desired = new SmDesiredState
+        {
+            Process = p,
+            Mode = "merge",
+            Rows = [new SmDesiredRow { Table = Table, Layer = "base", Name = "Column", Value = "BARCODE", SettingType = "SettingGroup", After = "Column=NOPE" }],
+        };
+
+        var result = await Tools.CreatePlan(Client, session.Id, desired, "new group", null, CancellationToken.None);
+
+        Assert.False(result.Ok);
+        Assert.Equal("group_anchor_not_found", result.Error!.Code);
+    }
+
+    [Fact]
     public async Task Tools_OutdatedClient_ReturnModuleOutdated()
     {
         var result = await Tools.StartSession(SqlServerFixture.OutdatedClientName, "tools", "anything", CancellationToken.None);

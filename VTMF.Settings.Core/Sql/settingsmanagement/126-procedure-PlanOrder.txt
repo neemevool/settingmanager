@@ -1,26 +1,76 @@
 -- Plan step inside sm.PlanDiff, before the items are numbered (temp tables: see 129-procedure-CreatePlan.txt).
--- Places the merge Insert items without ordernr (ordernr NULL from sm.PlanDiff), per (physicaltable, workercode),
--- new rows in desired order (#desired.rowno). ServerProcessSettings is not ordered (sm.PlanDiff gives new rows 0).
--- The rows considered are the rows that exist after the plan: current rows without a Delete item (at the ordernr of
--- their Update item, if any), Inserts with an ordernr, and new rows placed earlier.
---   Sort key: ordernr, NAME, VALUE. Path: NAME, or NAME.VALUE for SettingGroup rows that are not name-keyed (idkey).
---   Anchor: after = NAME or NAME=VALUE (last matching row by sort key); not found -> warning ANCHOR_NOT_FOUND and
---           fall through. Otherwise the last row (by sort key) whose path shares the most leading dot-segments
---           (>= 1) with the new row's path. None -> append at max(ordernr) + 10 (10 for an empty table).
---   Placement: after the anchor and after new rows already placed directly behind it. A = that row's ordernr,
---           N = next row's ordernr: no next -> A + 10; N - A >= 2 -> A + (N - A) / 2; else the whole
---           (physicaltable, workercode) is renumbered: final order ordernr 10, 20, 30...; Insert and Update items
---           take the final ordernr, current rows without an item whose ordernr changes get an Update item (same
---           values; ServerSetting rows carry NULL values as loaded in #current, sm.ApplyPlan sets only ordernr);
---           one warning RENUMBER per table. Explicit ordernr values in a renumbered table are renumbered too (the
---           relative order is kept). Duplicate identities among the current rows of a renumbered table are refused
---           (DUPLICATE_ROW, 51011), as renumbering touches every row.
+-- Places the merge Insert items without ordernr (ordernr NULL from sm.PlanDiff) and moves the blocks of op move rows,
+-- per (physicaltable, workercode), in one pass in desired order (#desired.rowno). ServerProcessSettings is not ordered
+-- (sm.PlanDiff gives new rows 0; sm.CreatePlan refuses move there).
+--
+-- Working set #ord: the rows that exist after the plan in every table with rows to place or blocks to move: current
+-- rows without a Delete item (at the ordernr of their Update item, if any; kind C), Inserts with an ordernr (kind I)
+-- and Inserts to place (kind N, ordernr NULL until placed). Columns maintained for block handling (path, blockkey,
+-- family and ishead come from sm.GroupPath / sm.GroupBlocks over the after-plan state, one part per table):
+--   path      NAME, or NAME.VALUE for SettingGroup rows that are not name-keyed (same rule as idkey).
+--   blockkey  group path of the block the row belongs to: for a block head its own path, for a child the longest
+--             group path that prefixes the row's path + '.'; NULL for plain rows. Groups never nest: a group row
+--             under the path of a group with another NAME is a child of that block; a group row is never a child
+--             of a sibling with the same NAME (Column=A.B is its own block next to Column=A).
+--   ishead    1 on a block head (the group row of its block).
+--   family    for block heads: NAME for value-keyed groups (Column for Column=DOCNR and Column=Item.Code), NAME
+--             without its last segment for name-keyed groups (Detail for Detail.Lines).
+--   unithead  for kind N: the row that heads the unit this row is placed with. A new child of a new group row is
+--             placed right after that group row (group row first, then its children in rowno order), whatever the
+--             order in the desired state; every other new row is a unit of its own.
+--   movehead  1 on the existing group row (kind C) of an op move row; it carries that row's rowno, after and apiname
+--             and is a unit head in the same pass as the new rows. Its unit is the block: every placed row with its
+--             blockkey (current rows, and new rows of the block placed earlier in the plan) in sort-key order.
+--   moved     1 on rows placed by a move (their ordernr changes; kind C rows get ordernr Update items).
+--   placedafter  for rows of a unit placed by this plan: the id of the row the unit was positioned after (0: before
+--             the first row), before skipping; NULL for '^' units and rows not placed by this plan.
+-- Sort key everywhere: ordernr, NAME, VALUE (then id). Per iteration #rank numbers the placed rows of the table by the
+-- sort key and #blocks gives per block its group row rank, first rank and end rank (last row of the block); a split
+-- block keeps these definitions (block end = last row of the block).
+--
+-- Position of a unit (the rank r it goes after; 0 = before the first row):
+--   New group row (block head): after '^' -> before the first row of the family's block with the earliest group row;
+--           after NAME or NAME=VALUE -> last matching row by sort key (database collation); no row -> Error
+--           GROUP_ANCHOR_NOT_FOUND; not a block head of the same family -> Error GROUP_ANCHOR_INVALID; else after
+--           that block's end. Omitted (or '^' without a family block, or refused) -> after the end of the family's
+--           block with the latest group row; no family block -> longest prefix / append (below).
+--   New child of a placed block: after an anchor inside its own block; an anchor in another block or outside any
+--           block -> warning ANCHOR_OUTSIDE_GROUP and the end of its block; not found -> warning ANCHOR_NOT_FOUND
+--           and the end of its block; no after -> the end of its block.
+--   New plain row: anchor (last matching row by sort key; not found -> warning ANCHOR_NOT_FOUND), else the last row
+--           whose path shares the most leading dot-segments (>= 1) with the row's path, else append after the last
+--           row.
+--   Moved group (op move, after required): same as a new group row, after the block is taken out of the table
+--           (ordernr NULL). Checked first, with the block in place: anchor not found -> Error GROUP_ANCHOR_NOT_FOUND;
+--           anchor is the group itself or inside its block, or not a group of the same family -> Error
+--           GROUP_ANCHOR_INVALID (the block stays). Already there (block not split, and the family block before it is
+--           the anchor block, or for '^' there is none) -> nothing. A group row inside another block (nested) is not
+--           moved (Error GROUP_NOT_FOUND).
+--   Except for '^', the unit also goes after the units this plan already positioned after that same row and that
+--   follow it directly (placedafter; a child skips only rows of its own block), which keeps desired order for
+--   several units with the same anchor. Rows placed or moved to that spot by another rule (e.g. a block moved to
+--   '^') are not skipped, so an in-block anchor on a moved group row is honoured.
+--   Never inside a foreign block: while the position lies between a block's group row and its end (a block other
+--   than the child's own), it moves to after that block's end.
+-- Ordernr for a unit of k rows (A = ordernr at rank r, 0 for r = 0; N = ordernr at rank r + 1): no N -> A + 10 * i;
+--   N - A >= k + 1 -> A + (N - A) * i / (k + 1), i = 1..k; else the whole (physicaltable, workercode) is renumbered:
+--   the placed rows are spread in steps of 10 * (k + 1), the unit takes the gap behind rank r, and the final
+--   renumbering compresses the table to 10, 20, 30...; Insert and Update items take the final ordernr, current rows
+--   without an item whose ordernr changes get an Update item (same values; ServerSetting rows carry NULL values as
+--   loaded in #current, sm.ApplyPlan sets only ordernr); one warning RENUMBER per table. Explicit ordernr values in a
+--   renumbered table are renumbered too (the relative order is kept). Moved current rows get the same treatment in
+--   any table: their Update item (value change in the same plan) takes the new ordernr, else an ordernr-only Update.
+--   Duplicate identities among the current rows of a renumbered table, or of a moved row, are refused
+--   (DUPLICATE_ROW, 51011), as the plan changes the ordernr of each of them.
+-- Errors go to #warnings with severity Error (a refused group is still placed by the omitted rule so later anchors
+-- resolve) and are thrown through sm.PlanGuardrails @throwonly = 1 once all units are placed.
 CREATE OR ALTER PROCEDURE sm.PlanOrder
 AS
 BEGIN
     SET NOCOUNT ON;
 
     IF NOT EXISTS (SELECT 1 FROM #items WHERE action = N'Insert' AND ordernr IS NULL)
+       AND NOT EXISTS (SELECT 1 FROM #desired WHERE op = N'move')
         RETURN;
 
     CREATE TABLE #ord
@@ -40,7 +90,14 @@ BEGIN
         rowno         int            NULL,
         after         nvarchar(1000) COLLATE DATABASE_DEFAULT NULL,
         apiname       nvarchar(200)  COLLATE DATABASE_DEFAULT NULL,
-        path AS CONCAT(name, CASE WHEN settingtype = N'SettingGroup' AND LEFT(name, 7) <> N'Detail.' THEN N'.' + value END),
+        blockkey      nvarchar(1000) COLLATE DATABASE_DEFAULT NULL,
+        family        nvarchar(1000) COLLATE DATABASE_DEFAULT NULL,
+        unithead      int            NULL,
+        movehead      bit            NOT NULL DEFAULT 0,
+        moved         bit            NOT NULL DEFAULT 0,
+        placedafter   int            NULL,
+        path          nvarchar(1000) COLLATE DATABASE_DEFAULT NULL,
+        ishead        bit            NOT NULL DEFAULT 0,
         idkey AS CONCAT(physicaltable, NCHAR(1), workercode, NCHAR(1), name, NCHAR(1),
                         CASE WHEN settingtype = N'SettingGroup' AND LEFT(name, 7) <> N'Detail.' THEN N'V' + value ELSE N'-' END)
     );
@@ -54,11 +111,16 @@ BEGIN
     FROM #items AS i
     WHERE i.action IN (N'Insert', N'Update', N'Delete');
 
-    SELECT DISTINCT physicaltable, workercode
+    SELECT physicaltable, workercode
     INTO #ordtables
     FROM #items
-    WHERE action = N'Insert' AND ordernr IS NULL;
+    WHERE action = N'Insert' AND ordernr IS NULL
+    UNION
+    SELECT physicaltable, workercode
+    FROM #desired
+    WHERE op = N'move' AND physicaltable IS NOT NULL AND workercode IS NOT NULL;
 
+    -- Step 1: load the working set.
     INSERT INTO #ord (kind, physicaltable, workercode, [table], layer, name, value, settingtype, listvalue, curordernr, ordernr)
     SELECT N'C', c.physicaltable, c.workercode, c.[table], c.layer, c.name, c.value, c.settingtype, c.listvalue, c.ordernr,
            ISNULL(u.ordernr, c.ordernr)
@@ -79,26 +141,111 @@ BEGIN
                                  THEN N'V' + i.value ELSE N'-' END)
     WHERE i.action = N'Insert';
 
-    CREATE TABLE #rank (rn int NOT NULL PRIMARY KEY, id int NOT NULL, kind char(1) COLLATE DATABASE_DEFAULT NOT NULL, ordernr int NOT NULL);
+    -- Step 2: paths, blocks, families (sm.GroupBlocks; after-plan state: every row of #ord, placed or not, one part
+    -- per table; #groupblocks is created by sm.PlanDiff) and placement units.
+    TRUNCATE TABLE #groupblocks;
+    INSERT INTO #groupblocks (part, name, value, settingtype, canhead, ref)
+    SELECT CONCAT(physicaltable, NCHAR(1), workercode), name, value, settingtype, 1, id
+    FROM #ord;
+
+    EXEC sm.GroupBlocks;
+
+    UPDATE o
+    SET path = g.path, blockkey = g.blockkey, family = g.family, ishead = g.ishead
+    FROM #ord AS o
+    JOIN #groupblocks AS g ON g.ref = o.id;
+
+    UPDATE o
+    SET unithead = COALESCE(h.id, o.id)
+    FROM #ord AS o
+    OUTER APPLY (SELECT TOP (1) x.id
+                 FROM #ord AS x
+                 WHERE x.kind = N'N' AND x.id <> o.id
+                   AND x.physicaltable = o.physicaltable AND x.workercode = o.workercode
+                   AND x.ishead = 1 AND x.blockkey = o.blockkey
+                 ORDER BY x.rowno, x.id) AS h
+    WHERE o.kind = N'N';
+
+    -- Moves: the existing group row heads the unit (sm.PlanDiff refused moves of missing groups).
+    UPDATE o
+    SET movehead = 1, rowno = d.rowno, after = d.after, apiname = d.apiname
+    FROM #ord AS o
+    JOIN #desired AS d ON d.op = N'move' AND d.idkey = o.idkey
+    WHERE o.kind = N'C' AND o.settingtype = N'SettingGroup';
+
+    INSERT INTO #warnings (severity, code, message)
+    SELECT N'Error', N'GROUP_NOT_FOUND',
+           LEFT(CONCAT(N'Group to move ', o.apiname, CASE WHEN LEFT(o.name, 7) <> N'Detail.' THEN N'=' + o.value END,
+                       N' in ', o.physicaltable, N' (', o.[table], N', ', o.layer, N') lies inside the block of ',
+                       o.blockkey, N' and is not a group of its own; it cannot be moved.'), 1000)
+    FROM #ord AS o
+    WHERE o.movehead = 1 AND o.ishead = 0
+    ORDER BY o.rowno;
+
+    UPDATE #ord SET movehead = 0 WHERE movehead = 1 AND ishead = 0;
+
+    CREATE TABLE #unit (seq int NOT NULL PRIMARY KEY, id int NOT NULL);
+    CREATE TABLE #rank
+    (
+        rn       int            NOT NULL PRIMARY KEY,
+        id       int            NOT NULL,
+        placedafter int         NULL,       -- see #ord.placedafter
+        ordernr  int            NOT NULL,
+        blockkey nvarchar(1000) COLLATE DATABASE_DEFAULT NULL,
+        ishead   bit            NOT NULL,
+        family   nvarchar(1000) COLLATE DATABASE_DEFAULT NULL
+    );
+    CREATE TABLE #blocks
+    (
+        blockkey nvarchar(1000) COLLATE DATABASE_DEFAULT NOT NULL,
+        family   nvarchar(1000) COLLATE DATABASE_DEFAULT NULL,
+        grouprn  int            NOT NULL,
+        firstrn  int            NOT NULL,
+        endrn    int            NOT NULL
+    );
     DECLARE @renumbered TABLE (physicaltable sysname NOT NULL, workercode nvarchar(100) NOT NULL);
 
     DECLARE @id int, @pt sysname, @wc nvarchar(100), @path nvarchar(1000), @after nvarchar(1000), @tbl nvarchar(100),
-            @layer nvarchar(110), @apiname nvarchar(200), @anchor int, @prefix nvarchar(1000), @eq int, @r int,
-            @a int, @n int, @ordernr int;
+            @layer nvarchar(110), @apiname nvarchar(200), @rowlabel nvarchar(700), @key nvarchar(1000),
+            @family nvarchar(1000), @isgroup bit, @ischild bit, @ismove bit, @k int, @anchor int, @anchorrn int,
+            @anchorkey nvarchar(1000), @anchorhead bit, @anchorfamily nvarchar(1000), @prefix nvarchar(1000), @eq int,
+            @r int, @e int, @skip bit, @a int, @n int, @step int, @takenout bit, @split bit, @grouprn int,
+            @prevkey nvarchar(1000), @base int;
 
-    DECLARE newrows CURSOR LOCAL FAST_FORWARD FOR
-        SELECT id FROM #ord WHERE kind = N'N' ORDER BY rowno, id;
-    OPEN newrows;
-    FETCH NEXT FROM newrows INTO @id;
+    -- Step 3: place the units (new rows and moved blocks) in desired order.
+    DECLARE units CURSOR LOCAL FAST_FORWARD FOR
+        SELECT id FROM #ord WHERE (kind = N'N' AND unithead = id) OR movehead = 1 ORDER BY rowno, id;
+    OPEN units;
+    FETCH NEXT FROM units INTO @id;
     WHILE @@FETCH_STATUS = 0
     BEGIN
         SELECT @pt = physicaltable, @wc = workercode, @path = path, @after = after, @tbl = [table], @layer = layer,
-               @apiname = apiname
+               @apiname = apiname, @key = blockkey, @family = family, @ismove = movehead,
+               @rowlabel = CONCAT(apiname, CASE WHEN settingtype = N'SettingGroup' AND LEFT(name, 7) <> N'Detail.'
+                                                THEN N'=' + value END),
+               @isgroup = ishead
         FROM #ord
         WHERE id = @id;
-        SET @anchor = NULL;
+        SET @ischild = CASE WHEN @key IS NOT NULL AND @isgroup = 0 THEN 1 ELSE 0 END;
 
-        IF @after IS NOT NULL
+        -- The unit: the head row, then (for a new group row) its new children in desired order; for a move the
+        -- placed rows of the block in their current order (sort key).
+        TRUNCATE TABLE #unit;
+        IF @ismove = 1
+            INSERT INTO #unit (seq, id)
+            SELECT ROW_NUMBER() OVER (ORDER BY ordernr, name, value, id), id
+            FROM #ord
+            WHERE physicaltable = @pt AND workercode = @wc AND blockkey = @key AND ordernr IS NOT NULL;
+        ELSE
+            INSERT INTO #unit (seq, id)
+            SELECT ROW_NUMBER() OVER (ORDER BY CASE WHEN id = @id THEN 0 ELSE 1 END, rowno, id), id
+            FROM #ord
+            WHERE unithead = @id;
+        SET @k = @@ROWCOUNT;
+
+        -- Anchor: NAME, else NAME=VALUE; last matching placed row by sort key (a moved block is still in place).
+        SET @anchor = NULL;
+        IF @after IS NOT NULL AND @after <> N'^'
         BEGIN
             SELECT TOP (1) @anchor = o.id
             FROM #ord AS o
@@ -112,80 +259,243 @@ BEGIN
                 WHERE o.physicaltable = @pt AND o.workercode = @wc AND o.ordernr IS NOT NULL
                   AND o.name = LEFT(@after, @eq - 1) AND o.value = SUBSTRING(@after, @eq + 1, 1000)
                 ORDER BY o.ordernr DESC, o.name DESC, o.value DESC, o.id DESC;
+        END
 
-            IF @anchor IS NULL
+        -- The placed rows of the table by sort key, and the blocks among them. A move ranks twice: with its block in
+        -- place (checks; already there?), then with the block taken out.
+        SET @takenout = 0;
+        WHILE 1 = 1
+        BEGIN
+            TRUNCATE TABLE #rank;
+            INSERT INTO #rank (rn, id, placedafter, ordernr, blockkey, ishead, family)
+            SELECT ROW_NUMBER() OVER (ORDER BY ordernr, name, value, id), id, placedafter, ordernr, blockkey,
+                   ishead, family
+            FROM #ord
+            WHERE physicaltable = @pt AND workercode = @wc AND ordernr IS NOT NULL;
+
+            TRUNCATE TABLE #blocks;
+            INSERT INTO #blocks (blockkey, family, grouprn, firstrn, endrn)
+            SELECT blockkey, MAX(CASE WHEN ishead = 1 THEN family END), MIN(CASE WHEN ishead = 1 THEN rn END), MIN(rn), MAX(rn)
+            FROM #rank
+            WHERE blockkey IS NOT NULL
+            GROUP BY blockkey
+            HAVING MAX(CONVERT(int, ishead)) = 1;
+
+            SELECT @anchorrn = NULL, @anchorkey = NULL, @anchorhead = NULL, @anchorfamily = NULL;
+            SELECT @anchorrn = rn, @anchorkey = blockkey, @anchorhead = ishead, @anchorfamily = family
+            FROM #rank
+            WHERE id = @anchor;
+
+            IF @ismove = 0 OR @takenout = 1
+                BREAK;
+
+            -- Move checks with the block in place; a refused move leaves the block where it is.
+            IF @after <> N'^' AND @anchor IS NULL
+            BEGIN
+                INSERT INTO #warnings (severity, code, message)
+                VALUES (N'Error', N'GROUP_ANCHOR_NOT_FOUND',
+                        LEFT(CONCAT(N'Group anchor not found: ', @after, N' in ', @pt, N' (', @tbl, N', ', @layer,
+                                    N') for the moved group ', @rowlabel,
+                                    N'. Name an existing group of the same kind in this table, or ^ for first.'), 1000));
+                BREAK;
+            END
+            IF @after <> N'^' AND @anchorkey = @key
+            BEGIN
+                INSERT INTO #warnings (severity, code, message)
+                VALUES (N'Error', N'GROUP_ANCHOR_INVALID',
+                        LEFT(CONCAT(N'Group anchor ', @after, N' in ', @pt, N' (', @tbl, N', ', @layer,
+                                    N') is the moved group ', @rowlabel, N' itself or lies inside its block.',
+                                    N' Name another ', @family, N' group in this table, or ^ for first.'), 1000));
+                BREAK;
+            END
+            IF @after <> N'^' AND (@anchorhead = 0 OR ISNULL(@anchorfamily, N'') <> ISNULL(@family, N''))
+            BEGIN
+                INSERT INTO #warnings (severity, code, message)
+                VALUES (N'Error', N'GROUP_ANCHOR_INVALID',
+                        LEFT(CONCAT(N'Group anchor ', @after, N' in ', @pt, N' (', @tbl, N', ', @layer,
+                                    N') for the moved group ', @rowlabel, N' is not a group of the same kind (', @family,
+                                    N'). Name an existing ', @family, N' group in this table, or ^ for first.'), 1000));
+                BREAK;
+            END
+
+            -- Already there: the block is contiguous and the family block before it is the anchor block (for '^':
+            -- there is none). Recomputing the gap would shift it, so nothing changes.
+            SELECT @grouprn = b.grouprn,
+                   @split = CASE WHEN b.grouprn = b.firstrn
+                                  AND b.endrn - b.firstrn + 1 = (SELECT COUNT(*) FROM #rank AS x WHERE x.blockkey = b.blockkey)
+                                 THEN 0 ELSE 1 END
+            FROM #blocks AS b
+            WHERE b.blockkey = @key;
+            SET @prevkey = (SELECT TOP (1) blockkey FROM #blocks
+                            WHERE family = @family AND grouprn < @grouprn ORDER BY grouprn DESC);
+            IF @split = 0 AND ((@after = N'^' AND @prevkey IS NULL) OR (@after <> N'^' AND @prevkey = @anchorkey))
+                BREAK;
+
+            -- Take the block out; it is placed below as a unit of k rows.
+            UPDATE o SET ordernr = NULL, moved = 1
+            FROM #ord AS o
+            JOIN #unit AS u ON u.id = o.id;
+            SET @takenout = 1;
+        END
+
+        IF @ismove = 1 AND @takenout = 0
+            GOTO nextunit;
+
+        SELECT @r = NULL, @skip = 1;
+
+        IF @isgroup = 1
+        BEGIN
+            IF @after = N'^'
+            BEGIN
+                SELECT TOP (1) @r = firstrn - 1 FROM #blocks WHERE family = @family ORDER BY grouprn;
+                SET @skip = 0;
+            END
+            ELSE IF @after IS NOT NULL AND @anchor IS NULL
+                INSERT INTO #warnings (severity, code, message)
+                VALUES (N'Error', N'GROUP_ANCHOR_NOT_FOUND',
+                        LEFT(CONCAT(N'Group anchor not found: ', @after, N' in ', @pt, N' (', @tbl, N', ', @layer,
+                                    N') for the new group ', @rowlabel,
+                                    N'. Name an existing group of the same kind in this table, or ^ for first.'), 1000));
+            ELSE IF @after IS NOT NULL AND (@anchorhead = 0 OR ISNULL(@anchorfamily, N'') <> ISNULL(@family, N''))
+                INSERT INTO #warnings (severity, code, message)
+                VALUES (N'Error', N'GROUP_ANCHOR_INVALID',
+                        LEFT(CONCAT(N'Group anchor ', @after, N' in ', @pt, N' (', @tbl, N', ', @layer,
+                                    N') for the new group ', @rowlabel, N' is not a group of the same kind (', @family,
+                                    N'). Name an existing ', @family, N' group in this table, or ^ for first.'), 1000));
+            ELSE IF @after IS NOT NULL
+                SELECT @r = endrn FROM #blocks WHERE blockkey = @anchorkey;
+
+            -- Omitted, '^' without a family block, or refused: after the family's last block.
+            IF @r IS NULL
+            BEGIN
+                SET @skip = 1;
+                SELECT TOP (1) @r = endrn FROM #blocks WHERE family = @family ORDER BY grouprn DESC;
+            END
+        END
+        ELSE IF @ischild = 1
+        BEGIN
+            IF @anchor IS NOT NULL AND @anchorkey = @key
+                SET @r = @anchorrn;
+            ELSE
+            BEGIN
+                IF @anchor IS NOT NULL
+                    INSERT INTO #warnings (severity, code, message)
+                    VALUES (N'Warning', N'ANCHOR_OUTSIDE_GROUP',
+                            LEFT(CONCAT(N'Anchor ', @after, N' in ', @tbl, N' (', @layer, N') for ', @apiname,
+                                        N' is outside its group ', @key, N'; placed at the end of the group.'), 1000));
+                ELSE IF @after IS NOT NULL
+                    INSERT INTO #warnings (severity, code, message)
+                    VALUES (N'Warning', N'ANCHOR_NOT_FOUND',
+                            LEFT(CONCAT(N'Anchor not found: ', @after, N' in ', @tbl, N' (', @layer, N') for ', @apiname,
+                                        N'; placed at the end of its group ', @key, N'.'), 1000));
+                SELECT @r = endrn FROM #blocks WHERE blockkey = @key;
+            END
+        END
+        ELSE
+        BEGIN
+            IF @after IS NOT NULL AND @anchor IS NULL
                 INSERT INTO #warnings (severity, code, message)
                 VALUES (N'Warning', N'ANCHOR_NOT_FOUND',
                         LEFT(CONCAT(N'Anchor not found: ', @after, N' in ', @tbl, N' (', @layer, N') for ', @apiname,
                                     N'; placed after the row with the longest common name prefix, else at the end.'), 1000));
+            SET @r = @anchorrn;
         END
 
         -- Longest common prefix: try the full path, then drop trailing segments while at least one remains.
         SET @prefix = @path;
-        WHILE @anchor IS NULL AND LEN(@prefix) > 0
+        WHILE @r IS NULL AND LEN(@prefix) > 0
         BEGIN
-            SELECT TOP (1) @anchor = o.id
-            FROM #ord AS o
-            WHERE o.physicaltable = @pt AND o.workercode = @wc AND o.ordernr IS NOT NULL
-              AND LEFT(o.path + N'.', DATALENGTH(@prefix + N'.') / 2) = @prefix + N'.'
-            ORDER BY o.ordernr DESC, o.name DESC, o.value DESC, o.id DESC;
+            SELECT TOP (1) @r = k.rn
+            FROM #rank AS k
+            JOIN #ord AS o ON o.id = k.id
+            WHERE LEFT(o.path + N'.', DATALENGTH(@prefix + N'.') / 2) = @prefix + N'.'
+            ORDER BY k.rn DESC;
 
             SET @prefix = CASE WHEN CHARINDEX(N'.', @prefix) = 0 THEN N''
                                ELSE LEFT(@prefix, DATALENGTH(@prefix) / 2 - CHARINDEX(N'.', REVERSE(@prefix))) END;
         END
 
-        IF @anchor IS NULL
-            SET @ordernr = ISNULL((SELECT MAX(ordernr) FROM #ord WHERE physicaltable = @pt AND workercode = @wc), 0) + 10;
-        ELSE
+        -- Append: after the last row (an empty table gives r = 0, so 10, 20...).
+        IF @r IS NULL
+            SET @r = ISNULL((SELECT MAX(rn) FROM #rank), 0);
+
+        -- Behind units this plan already placed at the same position (after the same row; desired order); a child
+        -- stays in its block. Rows placed or moved elsewhere (e.g. a block moved to '^') are not skipped.
+        SET @base = NULL;
+        IF @skip = 1
         BEGIN
-            TRUNCATE TABLE #rank;
-            INSERT INTO #rank (rn, id, kind, ordernr)
-            SELECT ROW_NUMBER() OVER (ORDER BY ordernr, name, value, id), id, kind, ordernr
-            FROM #ord
-            WHERE physicaltable = @pt AND workercode = @wc AND ordernr IS NOT NULL;
-
-            SET @r = (SELECT rn FROM #rank WHERE id = @anchor);
-            WHILE EXISTS (SELECT 1 FROM #rank WHERE rn = @r + 1 AND kind = N'N')
+            SET @base = ISNULL((SELECT id FROM #rank WHERE rn = @r), 0);
+            WHILE EXISTS (SELECT 1 FROM #rank
+                          WHERE rn = @r + 1 AND placedafter = @base AND (@ischild = 0 OR blockkey = @key))
                 SET @r += 1;
-
-            SET @a = (SELECT ordernr FROM #rank WHERE rn = @r);
-            SET @n = (SELECT ordernr FROM #rank WHERE rn = @r + 1);
-
-            IF @n IS NULL
-                SET @ordernr = @a + 10;
-            ELSE IF @n - @a >= 2
-                SET @ordernr = @a + (@n - @a) / 2;
-            ELSE
-            BEGIN
-                -- No gap: spread the table in steps of 20 and put the new row in the gap behind the anchor; the
-                -- final renumbering below compresses the table to steps of 10.
-                UPDATE o SET ordernr = 20 * k.rn
-                FROM #ord AS o
-                JOIN #rank AS k ON k.id = o.id;
-                SET @ordernr = 20 * @r + 10;
-
-                IF NOT EXISTS (SELECT 1 FROM @renumbered WHERE physicaltable = @pt AND workercode = @wc)
-                    INSERT INTO @renumbered (physicaltable, workercode) VALUES (@pt, @wc);
-            END
         END
 
-        UPDATE #ord SET ordernr = @ordernr WHERE id = @id;
+        -- Never inside a foreign block: move to after the end of every block the position lies in.
+        WHILE 1 = 1
+        BEGIN
+            SET @e = (SELECT MAX(endrn) FROM #blocks
+                      WHERE grouprn <= @r AND endrn > @r AND (@ischild = 0 OR blockkey <> @key));
+            IF @e IS NULL
+                BREAK;
+            SET @r = @e;
+        END
 
-        FETCH NEXT FROM newrows INTO @id;
+        -- Ordernr for the k unit rows in the gap behind rank r.
+        SET @a = ISNULL((SELECT ordernr FROM #rank WHERE rn = @r), 0);
+        SET @n = (SELECT ordernr FROM #rank WHERE rn = @r + 1);
+
+        IF @n IS NULL
+            UPDATE o SET ordernr = @a + 10 * u.seq
+            FROM #ord AS o
+            JOIN #unit AS u ON u.id = o.id;
+        ELSE IF CONVERT(bigint, @n) - @a >= @k + 1
+            UPDATE o SET ordernr = @a + CONVERT(int, (CONVERT(bigint, @n) - @a) * u.seq / (@k + 1))
+            FROM #ord AS o
+            JOIN #unit AS u ON u.id = o.id;
+        ELSE
+        BEGIN
+            -- No room: spread the table in steps of 10 * (k + 1) and put the unit in the gap behind rank r; the
+            -- final renumbering below compresses the table to steps of 10.
+            SET @step = 10 * (@k + 1);
+            UPDATE o SET ordernr = @step * k.rn
+            FROM #ord AS o
+            JOIN #rank AS k ON k.id = o.id;
+
+            UPDATE o SET ordernr = @step * @r + 10 * u.seq
+            FROM #ord AS o
+            JOIN #unit AS u ON u.id = o.id;
+
+            IF NOT EXISTS (SELECT 1 FROM @renumbered WHERE physicaltable = @pt AND workercode = @wc)
+                INSERT INTO @renumbered (physicaltable, workercode) VALUES (@pt, @wc);
+        END
+
+        UPDATE o SET placedafter = @base
+        FROM #ord AS o
+        JOIN #unit AS u ON u.id = o.id;
+
+nextunit:
+        FETCH NEXT FROM units INTO @id;
     END
-    CLOSE newrows;
-    DEALLOCATE newrows;
+    CLOSE units;
+    DEALLOCATE units;
 
-    -- Renumbering touches every current row of the table, so duplicate identities there are refused like touched
-    -- duplicates in sm.PlanGuardrails (DUPLICATE_ROW, 51011; never a ServerSetting value in the message).
+    -- Refused group anchors (and errors collected earlier by sm.PlanDiff) are thrown before anything else.
+    EXEC sm.PlanGuardrails @process = NULL, @throwonly = 1;
+
+    -- Step 4: renumbering, duplicate check and item updates.
+    -- Renumbering touches every current row of the table and a move every row of the block, so duplicate identities
+    -- there are refused like touched duplicates in sm.PlanGuardrails (DUPLICATE_ROW, 51011; never a ServerSetting
+    -- value in the message).
     DECLARE @dupmessage nvarchar(2048);
     WITH dup AS
     (
         SELECT c.idkey, MIN(c.physicaltable) AS physicaltable, MIN(c.workercode) AS workercode, MIN(c.name) AS name,
                MIN(c.value) AS value, MIN(c.settingtype) AS settingtype, MAX(c.settingtype) AS maxsettingtype,
-               COUNT(*) AS n
+               COUNT(*) AS n, MAX(CASE WHEN r.physicaltable IS NULL THEN 0 ELSE 1 END) AS renumbered
         FROM #current AS c
-        JOIN @renumbered AS r ON r.physicaltable = c.physicaltable AND r.workercode = c.workercode
+        LEFT JOIN @renumbered AS r ON r.physicaltable = c.physicaltable AND r.workercode = c.workercode
+        WHERE r.physicaltable IS NOT NULL
+           OR EXISTS (SELECT 1 FROM #ord AS o WHERE o.moved = 1 AND o.kind = N'C' AND o.idkey = c.idkey)
         GROUP BY c.idkey
         HAVING COUNT(*) > 1
     )
@@ -193,7 +503,9 @@ BEGIN
                CONCAT(N'Duplicate rows in ', physicaltable, N' (workercode ', workercode, N'): NAME ', name,
                       CASE WHEN settingtype = N'SettingGroup' AND maxsettingtype = N'SettingGroup' AND LEFT(name, 7) <> N'Detail.'
                            THEN N' VALUE ' + value END,
-                      N' occurs ', n, N' times; the new rows require renumbering this table.',
+                      N' occurs ', n,
+                      CASE WHEN renumbered = 1 THEN N' times; the new rows require renumbering this table.'
+                           ELSE N' times; the plan moves this row with its group.' END,
                       N' Clean up the duplicates before planning changes to this table.')), NCHAR(10))
                WITHIN GROUP (ORDER BY physicaltable, workercode, name, value), 2048)
     FROM dup;
@@ -220,22 +532,32 @@ BEGIN
                                  THEN N'V' + i.value ELSE N'-' END)
     WHERE i.action = N'Insert';
 
-    -- Renumbered tables: Update items take the final ordernr; current rows without an item get an Update.
+    -- Current rows whose ordernr the plan sets (every row of a renumbered table, and moved rows in any table).
+    SELECT o.id, o.idkey
+    INTO #reordered
+    FROM #ord AS o
+    WHERE o.kind = N'C'
+      AND (o.moved = 1
+           OR EXISTS (SELECT 1 FROM @renumbered AS r WHERE r.physicaltable = o.physicaltable AND r.workercode = o.workercode));
+
+    -- Their Update items (value change in the same plan) take the final ordernr: one item per row.
     UPDATE i
     SET ordernr = o.ordernr
     FROM #items AS i
-    JOIN #ord AS o
-        ON o.kind = N'C'
-       AND o.idkey = CONCAT(i.physicaltable, NCHAR(1), i.workercode, NCHAR(1), i.name, NCHAR(1),
+    JOIN #reordered AS x
+        ON x.idkey = CONCAT(i.physicaltable, NCHAR(1), i.workercode, NCHAR(1), i.name, NCHAR(1),
                             CASE WHEN i.settingtype = N'SettingGroup' AND LEFT(i.name, 7) <> N'Detail.'
                                  THEN N'V' + i.value ELSE N'-' END)
-    JOIN @renumbered AS r ON r.physicaltable = o.physicaltable AND r.workercode = o.workercode
+    JOIN #ord AS o ON o.id = x.id
     WHERE i.action = N'Update';
 
-    -- An ordernr-only Update whose ordernr the renumbering restored is no longer a change.
+    -- An ordernr-only Update whose ordernr the renumbering or move restored is no longer a change.
     DELETE i
     FROM #items AS i
-    JOIN @renumbered AS r ON r.physicaltable = i.physicaltable AND r.workercode = i.workercode
+    JOIN #reordered AS x
+        ON x.idkey = CONCAT(i.physicaltable, NCHAR(1), i.workercode, NCHAR(1), i.name, NCHAR(1),
+                            CASE WHEN i.settingtype = N'SettingGroup' AND LEFT(i.name, 7) <> N'Detail.'
+                                 THEN N'V' + i.value ELSE N'-' END)
     WHERE i.action = N'Update'
       AND i.ordernr = i.oldordernr
       AND NOT EXISTS (SELECT i.value COLLATE Latin1_General_BIN2, i.settingtype COLLATE Latin1_General_BIN2,
@@ -244,14 +566,14 @@ BEGIN
                       SELECT i.oldvalue COLLATE Latin1_General_BIN2, i.oldsettingtype COLLATE Latin1_General_BIN2,
                              i.oldlistvalue COLLATE Latin1_General_BIN2);
 
+    -- The others get an ordernr-only Update (same values; ServerSetting rows carry NULL values).
     INSERT INTO #items (action, physicaltable, [table], layer, workercode, name, value, settingtype, listvalue, ordernr,
                         oldvalue, oldsettingtype, oldlistvalue, oldordernr)
     SELECT N'Update', o.physicaltable, o.[table], o.layer, o.workercode, o.name, o.value, o.settingtype, o.listvalue,
            o.ordernr, o.value, o.settingtype, o.listvalue, o.curordernr
     FROM #ord AS o
-    JOIN @renumbered AS r ON r.physicaltable = o.physicaltable AND r.workercode = o.workercode
-    WHERE o.kind = N'C'
-      AND o.ordernr <> o.curordernr
+    JOIN #reordered AS x ON x.id = o.id
+    WHERE o.ordernr <> o.curordernr
       AND NOT EXISTS (SELECT 1 FROM #itemkeys AS k WHERE k.action = N'Update' AND k.idkey = o.idkey);
 
     INSERT INTO #warnings (severity, code, message)

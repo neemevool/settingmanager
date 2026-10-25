@@ -28,12 +28,14 @@ A feature is applied through the same plan engine as `manage-settings`: preview,
 4. **Parameters.** Ask each parameter's question (`description`) in order, one or a few at a time:
    - `List`: offer the values with their descriptions, mark the default;
    - `Boolean`: ask yes/no; pass `True` / `False`;
-   - `Text` / `Number`: offer the default if there is one.
+   - `Text` / `Number`: offer the default if there is one;
+   - `Position` (where a new column goes): look at the target — `get_settings` on the chosen process, the table kind of the feature's group row and its layer — and offer the columns that exist there (their VALUE, or the name after `Detail.` e.g. `Lines`) plus "first". Ask in the parameter's own words. Pass the column name alone (`DOCNR`, never `Column=DOCNR`) or `first`. Never choose the position yourself. If the column already exists on the customer, the answer has no effect: it stays where it is.
 
-   A parameter without a default must be answered. Never guess an answer. `{{processname}}` and `{{clientname}}` are filled automatically — never ask for them. Answers can end up inside setting names (e.g. a column name); the preview shows the resulting names — check them with the user.
+   For every parameter: one without a default must be answered. Never guess an answer. `{{processname}}` and `{{clientname}}` are filled automatically — never ask for them. Answers can end up inside setting names (e.g. a column name); the preview shows the resulting names — check them with the user.
 5. **Session.** Use the current `manage-settings` session in this conversation, or ask "What are you setting up?" and `start_session(client, name, process)` (phase 2 rule). `session_closed` → start a new one.
 6. **Preview.** `feature_plan(client, featureId, process, sessionId, parameters, options?)`.
    - `data.plan.status` `Created` → show `data.plan.items` in the `manage-settings` preview table format, the plan warnings in plain words, and `data.warnings`:
+     - `GROUP_NOT_MOVED` → "The column already exists; it stays where it is (I can move it with manage-settings)."
      - `SETTING_NOT_READ` → "No procedure of {process} reads `{setting}`; the code of this process may not support this feature" (if the message says the scan was uncertain, say so). Point to the feature's guidance; let the consultant decide.
    - Briefly list the post-apply steps (`data.steps`) that will follow, so the consultant knows the whole job before confirming.
    - `NoChanges` → the customer already has it this way; nothing to apply (still offer the post-apply steps if they may be missing).
@@ -48,6 +50,8 @@ A feature is applied through the same plan engine as `manage-settings`: preview,
 | `feature_param_missing` | Ask the listed questions, then call `feature_plan` again. |
 | `feature_param_invalid` | The answer does not fit the type (not a number, not yes/no, not one of the list values). Ask again, offering the valid values. |
 | `feature_not_finished` | The feature is a draft. Do not apply it; tell the user it is unfinished (its author can finish it with `create-feature`). |
+| `group_anchor_not_found` | The column chosen as "after" does not exist on this customer. Explain, show the columns that do exist plus "first", ask again, call `feature_plan` again. Never pick one yourself. |
+| `feature_needs_position` | The feature adds a column but does not ask where it goes. Do not apply it; tell the user it must be fixed first with `create-feature`. |
 | `feature_not_found` | The feature no longer exists; search again with `find_features`. |
 | `table_missing`, `alias_target`, `session_closed`, `serversetting`, `invalid_desired`, `Stale`, … | As in `manage-settings`. |
 | `metabase_not_configured`, `feature_module_*`, `module_*` | Follow the `sm-module` skill. |

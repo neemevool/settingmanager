@@ -16,6 +16,11 @@ public sealed class SmErrorCodesTests
     [InlineData(51014, "plan_not_found")]
     [InlineData(51015, "plan_status")]
     [InlineData(51016, "checksum_mismatch")]
+    [InlineData(51017, "group_anchor_not_found")]
+    [InlineData(51018, "group_anchor_invalid")]
+    [InlineData(51019, "group_not_found")]
+    [InlineData(51020, "group_ordernr")]
+    [InlineData(51021, "group_remove_conflict")]
     public void FromSqlErrorNumber_MapsPlanEngineErrors(int number, string code) =>
         Assert.Equal(code, SmErrorCodes.FromSqlErrorNumber(number));
 }

@@ -16,12 +16,14 @@
     layer         nvarchar(110)  NOT NULL   base | env:{e} | lang:{l}
     apiname       nvarchar(200)  NOT NULL   NAME as given (without process prefix)
     name          nvarchar(200)  NULL       physical NAME (sm.PlanResolve; {process}. prefix for ServerProcessSettings)
-    value         nvarchar(400)  NULL       NULL only for op remove
+    value         nvarchar(400)  NULL       NULL only for op remove, or op move of a name-keyed (Detail.*) group
     settingtype   nvarchar(20)   NOT NULL
     listvalue     nvarchar(1600) NULL
     ordernr       int            NULL
-    op            nvarchar(10)   NOT NULL   upsert | remove
-    after         nvarchar(1000) NULL       ordering anchor NAME or NAME=VALUE
+    op            nvarchar(10)   NOT NULL   upsert | remove | move (merge only: moves an existing SettingGroup row with
+                                            its block to after; not in ServerProcessSettings; see sm.PlanOrder)
+    after         nvarchar(1000) NULL       ordering anchor NAME or NAME=VALUE, or ^ (first in the group's family;
+                                            SettingGroup rows only); required for move; see sm.PlanOrder
     physicaltable sysname        NULL       sm.PlanResolve
     workercode    nvarchar(100)  NULL       sm.PlanResolve
     idkey         computed                  row identity, see below
@@ -216,7 +218,17 @@ BEGIN
                      WHEN sm.IsSafeName(LEFT(w.[table], 200)) = 0 OR LEN(w.[table]) > 100 THEN N'has a missing or invalid table name.'
                      WHEN w.name IS NULL OR LEN(w.name) = 0 THEN N'has no name.'
                      WHEN LEN(w.name) > 200 THEN N'has a name longer than 200 characters.'
-                     WHEN w.op NOT IN (N'upsert', N'remove') THEN N'has an unknown op (use upsert or remove).'
+                     WHEN w.op NOT IN (N'upsert', N'remove', N'move') THEN N'has an unknown op (use upsert, remove or move).'
+                     WHEN @mode = N'replace' AND w.op = N'move' THEN N'uses op move; in replace mode list only the rows to keep (with their ordernr).'
+                     WHEN w.op = N'move' AND ISNULL(w.settingtype, N'Setting') <> N'SettingGroup'
+                         THEN N'uses op move, which is only valid on SettingGroup rows.'
+                     WHEN w.op = N'move' AND w.[table] = N'ServerProcessSettings'
+                         THEN N'uses op move in ServerProcessSettings, which has no ordering.'
+                     WHEN w.op = N'move' AND w.after IS NULL
+                         THEN N'uses op move without after (name a group of the same kind in the table, or ^ for first).'
+                     WHEN w.op = N'move' AND w.value IS NULL AND LEFT(w.name, 7) <> N'Detail.'
+                         THEN N'has no value (required for op move of a group keyed by value).'
+                     WHEN w.op = N'move' AND w.ordernr IS NOT NULL THEN N'uses op move with an ordernr (use after).'
                      WHEN w.op = N'upsert' AND w.value IS NULL THEN N'has no value (required for upsert).'
                      WHEN LEN(w.value) > 400 THEN N'has a value longer than 400 characters.'
                      WHEN w.settingtype IS NOT NULL AND LEN(w.settingtype) NOT BETWEEN 1 AND 20 THEN N'has an invalid settingtype.'
@@ -224,6 +236,8 @@ BEGIN
                      WHEN w.ordernr IS NOT NULL AND TRY_CONVERT(int, w.ordernr) IS NULL THEN N'has an ordernr that is not an integer.'
                      WHEN LEN(w.layer) > 110 THEN N'has an invalid layer.'
                      WHEN LEN(w.after) > 1000 THEN N'has an after anchor longer than 1000 characters.'
+                     WHEN w.after = N'^' AND ISNULL(w.settingtype, N'Setting') <> N'SettingGroup'
+                         THEN N'uses after ^ (first), which is only valid on SettingGroup rows.'
                      WHEN @mode = N'replace' AND w.op = N'remove' THEN N'uses op remove; in replace mode list only the rows to keep.'
                      WHEN @mode = N'replace' AND w.ordernr IS NULL THEN N'has no ordernr (required in replace mode).'
                  END AS problem) AS p

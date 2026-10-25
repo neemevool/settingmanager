@@ -22,6 +22,11 @@ public static class SmErrorCodes
     public const string PlanNotFound = "plan_not_found";
     public const string PlanStatus = "plan_status";
     public const string ChecksumMismatch = "checksum_mismatch";
+    public const string GroupAnchorNotFound = "group_anchor_not_found";
+    public const string GroupAnchorInvalid = "group_anchor_invalid";
+    public const string GroupNotFound = "group_not_found";
+    public const string GroupOrderNr = "group_ordernr";
+    public const string GroupRemoveConflict = "group_remove_conflict";
     public const string MetabaseNotConfigured = "metabase_not_configured";
     public const string FeatureModuleNotInstalled = "feature_module_not_installed";
     public const string FeatureModuleOutdated = "feature_module_outdated";
@@ -34,6 +39,7 @@ public static class SmErrorCodes
     public const string FeatureChanged = "feature_changed";
     public const string FeatureNameTaken = "feature_name_taken";
     public const string FeatureStatus = "feature_status";
+    public const string FeatureNeedsPosition = "feature_needs_position";
     public const string SmError = "sm_error";
 
     internal static string FromSqlErrorNumber(int number) => number switch
@@ -54,6 +60,11 @@ public static class SmErrorCodes
         51014 => PlanNotFound,
         51015 => PlanStatus,
         51016 => ChecksumMismatch,
+        51017 => GroupAnchorNotFound,
+        51018 => GroupAnchorInvalid,
+        51019 => GroupNotFound,
+        51020 => GroupOrderNr,
+        51021 => GroupRemoveConflict,
         52001 => FeatureNotFound,
         52002 => FeatureInvalid,
         52003 => FeatureChanged,

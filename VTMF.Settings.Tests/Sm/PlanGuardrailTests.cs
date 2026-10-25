@@ -68,7 +68,7 @@ public sealed class PlanGuardrailTests(SqlServerFixture fixture)
         var (p, session) = await NewProcessAsync();
 
         var lot = await fixture.Sm.CreatePlanAsync(
-            Client, Merge(p, Row("Column", "LOT", orderNr: 35, settingType: "SettingGroup")), "lot", session.Id, dryRun: true);
+            Client, Merge(p, Row("Column", "LOT", settingType: "SettingGroup")), "lot", session.Id, dryRun: true);
 
         var insert = Assert.Single(lot.Items);
         Assert.Equal("Insert", insert.Action);
@@ -82,14 +82,16 @@ public sealed class PlanGuardrailTests(SqlServerFixture fixture)
             """);
 
         var detail = await fixture.Sm.CreatePlanAsync(
-            Client, Merge(p, Row("Detail", "A", orderNr: 99, settingType: "SettingGroup")), "detail", session.Id, dryRun: true);
+            Client, Merge(p, new SmDesiredRow { Table = Table, Name = "Detail", Value = "A", SettingType = "SettingGroup", ListValue = "x" }),
+            "detail", session.Id, dryRun: true);
 
         var update = Assert.Single(detail.Items);
         Assert.Equal("Update", update.Action);
         Assert.Equal("Detail", update.Name);
         Assert.Equal("A", update.Value);
         Assert.Equal("A", update.OldValue);
-        Assert.Equal(99, update.OrderNr);
+        Assert.Equal("x", update.ListValue);
+        Assert.Equal(70, update.OrderNr);
         Assert.Equal(70, update.OldOrderNr);
     }
 

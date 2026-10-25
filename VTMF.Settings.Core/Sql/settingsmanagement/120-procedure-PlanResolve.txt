@@ -2,7 +2,9 @@
 -- #scope, validates layers and names, and resolves physical table, workercode and physical NAME in #scope and
 -- #desired. Physical table = {process}{table}{suffix} (or the alias table with @targetAlias, see below);
 -- ServerProcessSettings stays as is with NAME prefixed {process}. Missing tables stay tableexists = 0 for
--- sm.PlanGuardrails (TABLE_MISSING / createTable / ALIAS_TARGET).
+-- sm.PlanGuardrails (TABLE_MISSING / createTable / ALIAS_TARGET). A remove of a SettingGroup row in a base or env
+-- table adds the existing lang tables of that table's view to #scope (see sm.PlanDiff). A SettingGroup row listed
+-- once as remove and once as upsert/move is left to sm.PlanDiff (GROUP_REMOVE_CONFLICT); other repeats are refused.
 CREATE OR ALTER PROCEDURE sm.PlanResolve
     @process nvarchar(100),
     @mode    nvarchar(10),
@@ -76,6 +78,70 @@ BEGIN
             WHERE s.aliasof IS NOT NULL;
     END
 
+    -- Removing a SettingGroup row from a base or env table also removes its child rows in the lang tables of the
+    -- same view (sm.PlanDiff), so every existing lang table of the table the row is removed from (same base table,
+    -- also when that is the alias table) joins the scope, already resolved. Only existing tables are added: no
+    -- TABLE_MISSING / CreateTable for them. Plans without such a remove get no extra scope. As in sm.PlanDiff, the
+    -- existing row decides whether a remove is a group remove (#current is not loaded yet, so the physical table
+    -- is read): a name-keyed group (Detail.*) matches by NAME alone, also when the desired row has no settingtype.
+    DECLARE @groupremoves TABLE
+    (
+        [table] nvarchar(100) COLLATE DATABASE_DEFAULT NOT NULL,
+        layer   nvarchar(110) COLLATE DATABASE_DEFAULT NOT NULL
+    );
+    DECLARE @rtable nvarchar(100), @rlayer nvarchar(110), @rpt sysname, @rwc nvarchar(100), @rname nvarchar(200),
+            @rvalue nvarchar(400), @rbyvalue bit, @rfound bit, @rsql nvarchar(max);
+    DECLARE removes CURSOR LOCAL FAST_FORWARD FOR
+        SELECT d.[table], d.layer, s.physicaltable, s.workercode, d.apiname, d.value,
+               CASE WHEN d.settingtype = N'SettingGroup' AND LEFT(d.apiname, 7) <> N'Detail.' THEN 1 ELSE 0 END
+        FROM #desired AS d
+        JOIN #scope AS s ON s.[table] = d.[table] AND s.layer = d.layer
+        WHERE d.op = N'remove'
+          AND s.kind IN (N'base', N'env')
+          AND s.tableexists = 1
+          AND s.[table] <> N'ServerProcessSettings'
+          AND (d.settingtype = N'SettingGroup' OR LEFT(d.apiname, 7) = N'Detail.');
+    OPEN removes;
+    FETCH NEXT FROM removes INTO @rtable, @rlayer, @rpt, @rwc, @rname, @rvalue, @rbyvalue;
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        IF NOT EXISTS (SELECT 1 FROM @groupremoves WHERE [table] = @rtable AND layer = @rlayer)
+        BEGIN
+            IF sm.IsSafeName(@rpt) = 0
+                THROW 51001, N'Invalid table name.', 1;
+            SET @rfound = 0;
+            SET @rsql = N'
+                IF EXISTS (SELECT 1 FROM dbo.' + QUOTENAME(@rpt) + N'
+                           WHERE workercode = @wc AND settingtype = N''SettingGroup'' AND NAME = @name
+                             AND (@byvalue = 0 OR VALUE = @value))
+                    SET @found = 1;';
+            EXEC sys.sp_executesql @rsql,
+                 N'@wc nvarchar(100), @name nvarchar(200), @value nvarchar(400), @byvalue bit, @found bit OUTPUT',
+                 @rwc, @rname, @rvalue, @rbyvalue, @rfound OUTPUT;
+            IF @rfound = 1
+                INSERT INTO @groupremoves ([table], layer) VALUES (@rtable, @rlayer);
+        END
+        FETCH NEXT FROM removes INTO @rtable, @rlayer, @rpt, @rwc, @rname, @rvalue, @rbyvalue;
+    END
+    CLOSE removes;
+    DEALLOCATE removes;
+
+    INSERT INTO #scope ([table], layer, replacescope, kind, physicaltable, workercode, tableexists, aliasof)
+    SELECT DISTINCT s.[table], pt.layer, 0, N'lang', pt.physicaltable, N'ALL', 1,
+           CASE WHEN o.owner <> @process THEN o.owner END
+    FROM #scope AS s
+    CROSS APPLY sm.ResolveLayer(s.layer) AS l
+    CROSS APPLY (SELECT LEFT(s.physicaltable, LEN(s.physicaltable) - LEN(l.suffix)) AS basetable) AS b
+    CROSS APPLY (SELECT LEFT(b.basetable, LEN(b.basetable) - LEN(s.[table])) AS owner) AS o
+    CROSS APPLY sm.ProcessTables(o.owner) AS pt
+    WHERE s.kind IN (N'base', N'env')
+      AND s.tableexists = 1
+      AND s.[table] <> N'ServerProcessSettings'
+      AND EXISTS (SELECT 1 FROM @groupremoves AS r WHERE r.[table] = s.[table] AND r.layer = s.layer)
+      AND pt.basetable = b.basetable
+      AND pt.layer LIKE N'lang:%'
+      AND NOT EXISTS (SELECT 1 FROM #scope AS x WHERE x.[table] = s.[table] AND x.layer = pt.layer);
+
     DECLARE @msg nvarchar(2048);
 
     UPDATE d
@@ -85,9 +151,17 @@ BEGIN
     FROM #desired AS d
     JOIN #scope AS s ON s.[table] = d.[table] AND s.layer = d.layer;
 
+    -- A SettingGroup row listed twice, once as remove and once as upsert or move, is a GROUP_REMOVE_CONFLICT
+    -- (sm.PlanDiff), not a duplicate.
     SELECT TOP (1) @msg = CONCAT(N'Invalid desired state: the row ', [table], N' (', layer, N') ', apiname, N' is listed more than once.')
     FROM #desired
-    WHERE idkey IN (SELECT idkey FROM #desired GROUP BY idkey HAVING COUNT(*) > 1)
+    WHERE idkey IN (SELECT idkey
+                    FROM #desired
+                    GROUP BY idkey
+                    HAVING COUNT(*) > 1
+                       AND NOT (COUNT(*) = 2
+                                AND SUM(CASE WHEN op = N'remove' THEN 1 ELSE 0 END) = 1
+                                AND MIN(settingtype) = N'SettingGroup' AND MAX(settingtype) = N'SettingGroup'))
     ORDER BY rowno;
     IF @msg IS NOT NULL
         THROW 51006, @msg, 1;

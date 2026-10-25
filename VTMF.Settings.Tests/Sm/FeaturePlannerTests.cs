@@ -1,5 +1,6 @@
 using VTMF.Settings.Core.Sm;
 using VTMF.Settings.Core.Sm.Features;
+using VTMF.Settings.Services;
 using VTMF.Settings.Tests.Sql;
 
 namespace VTMF.Settings.Tests.Sm;
@@ -135,6 +136,97 @@ public sealed class FeaturePlannerTests(SqlServerFixture fixture)
         var rows = await PlanSandbox.RowsAsync(fixture, Client, $"{p}DocumentListLayout");
         Assert.Contains(rows, r => r.Name == "Grid.LOT'; DROP");
         Assert.Contains(rows, r => r.Name == "Grid.PageSize");
+    }
+
+    private static SmFeature BarcodeColumn(string name) => new()
+    {
+        Name = name,
+        Description = "Adds a barcode column",
+        BuiltOnProcess = "x",
+        Rows =
+        [
+            new SmFeatureRow { Table = "DocumentListLayout", Name = "Column", Value = "BARCODE", SettingType = "SettingGroup", After = "{{pos}}" },
+            new SmFeatureRow { Table = "DocumentListLayout", Name = "Column.BARCODE.Caption", Value = "Barcode" },
+        ],
+        Params = [new SmFeatureParam { Name = "pos", Description = "After which column should the barcode column be shown? (or first)", Type = "Position" }],
+    };
+
+    private static Dictionary<string, string> Pos(string answer) => new() { ["pos"] = answer };
+
+    [Fact]
+    public async Task FeaturePlan_Position_PlacesColumnBlock()
+    {
+        var id = await SaveAsync(BarcodeColumn(UniqueName()));
+        var (p, session) = await NewProcessAsync();
+
+        var result = await Planner.FeaturePlanAsync(Client, id, p, session, Pos("DOCNR"));
+
+        var group = Assert.Single(result.Plan.Items, i => i.Name == "Column" && i.Value == "BARCODE");
+        var caption = Assert.Single(result.Plan.Items, i => i.Name == "Column.BARCODE.Caption");
+        Assert.Equal(23, group.OrderNr);
+        Assert.Equal(26, caption.OrderNr);
+    }
+
+    [Fact]
+    public async Task FeaturePlan_PositionFirst_PlacesColumnBlockFirst()
+    {
+        var id = await SaveAsync(BarcodeColumn(UniqueName()));
+        var (p, session) = await NewProcessAsync();
+
+        var result = await Planner.FeaturePlanAsync(Client, id, p, session, Pos("first"));
+
+        var group = Assert.Single(result.Plan.Items, i => i.Name == "Column" && i.Value == "BARCODE");
+        var caption = Assert.Single(result.Plan.Items, i => i.Name == "Column.BARCODE.Caption");
+        Assert.True(group.OrderNr < caption.OrderNr);
+        Assert.True(caption.OrderNr < 10);
+    }
+
+    [Fact]
+    public async Task FeaturePlan_PositionMissingColumn_Refused()
+    {
+        var id = await SaveAsync(BarcodeColumn(UniqueName()));
+        var (p, session) = await NewProcessAsync();
+
+        var ex = await Assert.ThrowsAsync<SmException>(() => Planner.FeaturePlanAsync(Client, id, p, session, Pos("NOPE")));
+
+        Assert.Equal(SmErrorCodes.GroupAnchorNotFound, ex.Code);
+    }
+
+    [Fact]
+    public async Task FeaturePlan_Reapplied_GroupNotMoved()
+    {
+        var id = await SaveAsync(BarcodeColumn(UniqueName()));
+        var (p, session) = await NewProcessAsync();
+        var first = await Planner.FeaturePlanAsync(Client, id, p, session, Pos("DOCNR"));
+        await fixture.Sm.ApplyPlanAsync(Client, first.Plan.PlanId!.Value, first.Plan.Checksum!);
+
+        var again = await Planner.FeaturePlanAsync(Client, id, p, session, Pos("NOPE"));
+
+        Assert.Contains(again.Plan.Warnings, w => w.Code == "GROUP_NOT_MOVED");
+        var rows = await PlanSandbox.RowsAsync(fixture, Client, $"{p}DocumentListLayout");
+        Assert.Equal(23, Assert.Single(rows, r => r.Name == "Column" && r.Value == "BARCODE").OrderNr);
+    }
+
+    [Fact]
+    public async Task FeaturePlan_OldFinishedFeatureWithoutPosition_Refused()
+    {
+        var feature = BarcodeColumn(UniqueName());
+        var old = new SmFeature
+        {
+            Name = feature.Name,
+            Description = feature.Description,
+            BuiltOnProcess = feature.BuiltOnProcess,
+            Rows = [new SmFeatureRow { Table = "DocumentListLayout", Name = "Column", Value = "BARCODE", SettingType = "SettingGroup" }, feature.Rows[1]],
+        };
+        var id = await SaveAsync(old, finish: false);
+        await PlanSandbox.ExecAsync(fixture, SqlConnectionParameters.DefaultMetaBaseClientName,
+            $"UPDATE sm.feature SET status = N'Finished' WHERE id = {id}");
+        var (p, session) = await NewProcessAsync();
+
+        var ex = await Assert.ThrowsAsync<SmException>(() => Planner.FeaturePlanAsync(Client, id, p, session, null));
+
+        Assert.Equal(SmErrorCodes.FeatureNeedsPosition, ex.Code);
+        Assert.Contains("create-feature", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]

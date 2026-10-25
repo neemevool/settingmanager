@@ -118,6 +118,17 @@ public sealed class SmClient(SqlConnectionProvider connections, SmScriptSet scri
         return await QueryMultipleAsync(client, "sm.CreatePlan", parameters, ReadPlanResultAsync, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Creates a plan that renumbers one settings table (10, 20, 30...) so every SettingGroup block is contiguous and
+    /// orphan children go last (source renumber; status Created, NoChanges or DryRun); apply it with <see cref="ApplyPlanAsync"/>.
+    /// </summary>
+    public Task<SmPlanResult> CreateRenumberPlanAsync(
+        string client, string process, string table, string layer, string description, int? sessionId,
+        bool dryRun = false, CancellationToken cancellationToken = default) =>
+        QueryMultipleAsync(client, "sm.CreateRenumberPlan",
+            new { process, table, layer, description, sessionid = sessionId, dryrun = dryRun },
+            ReadPlanResultAsync, cancellationToken);
+
     /// <summary>Creates the inverse of an Applied plan (status Created); apply it with <see cref="ApplyPlanAsync"/>.</summary>
     public Task<SmPlanResult> CreateRollbackPlanAsync(string client, int planId, CancellationToken cancellationToken = default) =>
         QueryMultipleAsync(client, "sm.CreateRollbackPlan", new { planid = planId }, ReadPlanResultAsync, cancellationToken);
@@ -229,7 +240,7 @@ public sealed class SmClient(SqlConnectionProvider connections, SmScriptSet scri
         }
     }
 
-    /// <summary>Maps the three result sets of sm.CreatePlan and of the procedures returning the same shape (sm.CreateRollbackPlan, sm.CreateSessionRollbackPlan).</summary>
+    /// <summary>Maps the three result sets of sm.CreatePlan and of the procedures returning the same shape (sm.CreateRollbackPlan, sm.CreateSessionRollbackPlan, sm.CreateRenumberPlan).</summary>
     private static async Task<SmPlanResult> ReadPlanResultAsync(SqlMapper.GridReader grid)
     {
         var header = await grid.ReadSingleAsync<PlanHeader>().ConfigureAwait(false);

@@ -237,4 +237,68 @@ public sealed class SmFeatureExpanderTests
 
         Assert.Equal(SmErrorCodes.FeatureParamMissing, ex.Code);
     }
+
+    private static SmFeatureRow Group(string name, string value, string? after) =>
+        new() { Table = "DocumentListLayout", Name = name, Value = value, SettingType = "SettingGroup", After = after };
+
+    private static SmFeature PositionFeature(SmFeatureRow group) => Feature(
+        rows: [group, Group("Column", "{{name}}2", "Column={{name}}")],
+        parameters: [Param("pos", "Position"), Param("name")]);
+
+    [Fact]
+    public void Expand_PositionFirst_IsCaret()
+    {
+        var feature = PositionFeature(Group("Column", "{{name}}", "{{pos}}"));
+
+        var result = SmFeatureExpander.Expand(feature, "p", "c", Answers(("pos", "First"), ("name", "BARCODE")));
+
+        Assert.Equal("^", result.Desired.Rows[0].After);
+        Assert.Equal("Column=BARCODE", result.Desired.Rows[1].After);
+    }
+
+    [Fact]
+    public void Expand_PositionValueKeyed()
+    {
+        var feature = PositionFeature(Group("Column", "{{name}}", "{{pos}}"));
+
+        var result = SmFeatureExpander.Expand(feature, "p", "c", Answers(("pos", "DOCNR"), ("name", "BARCODE")));
+
+        Assert.Equal("Column=DOCNR", result.Desired.Rows[0].After);
+        Assert.Equal("DOCNR", result.Values["pos"]);
+    }
+
+    [Fact]
+    public void Expand_PositionNameKeyed()
+    {
+        var feature = PositionFeature(Group("Detail.{{name}}", "x", "{{pos}}"));
+
+        var result = SmFeatureExpander.Expand(feature, "p", "c", Answers(("pos", "Lines"), ("name", "Barcode")));
+
+        Assert.Equal("Detail.Lines", result.Desired.Rows[0].After);
+    }
+
+    [Fact]
+    public void Expand_PositionTrimmed()
+    {
+        var feature = PositionFeature(Group("Column", "{{name}}", " {{pos}} "));
+
+        var result = SmFeatureExpander.Expand(feature, "p", "c", Answers(("pos", " DOCNR "), ("name", "BARCODE")));
+
+        Assert.Equal("Column=DOCNR", result.Desired.Rows[0].After);
+    }
+
+    [Fact]
+    public void Expand_PositionEmpty_IsMissing()
+    {
+        var feature = PositionFeature(Group("Column", "{{name}}", "{{pos}}"));
+
+        foreach (var answer in new[] { "", "  " })
+        {
+            var ex = Assert.Throws<SmException>(() =>
+                SmFeatureExpander.Expand(feature, "p", "c", Answers(("pos", answer), ("name", "BARCODE"))));
+
+            Assert.Equal(SmErrorCodes.FeatureParamMissing, ex.Code);
+            Assert.Contains("pos", ex.Message, StringComparison.Ordinal);
+        }
+    }
 }

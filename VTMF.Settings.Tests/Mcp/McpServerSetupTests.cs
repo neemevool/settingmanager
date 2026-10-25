@@ -13,6 +13,7 @@ public sealed class McpServerSetupTests
     [
         "start_session", "list_sessions", "session_changes", "close_session", "create_plan", "get_plan", "list_plans",
         "apply_plan", "rollback_plan", "rollback_session", "compare_clients", "clone_plan", "legacy_env_migration_plan",
+        "renumber_plan",
     ];
 
     private static readonly string[] FeatureToolNames =

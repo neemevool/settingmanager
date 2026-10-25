@@ -9,7 +9,7 @@ public sealed class SmScriptSetTests
     {
         var set = SmScriptSet.LoadDefault();
 
-        Assert.Equal(37, set.Scripts.Count);
+        Assert.Equal(40, set.Scripts.Count);
         Assert.Equal("001-script-schema.txt", set.Scripts[0].Name);
         Assert.DoesNotContain(set.Scripts, s => s.Name.StartsWith("999", StringComparison.Ordinal));
         Assert.True(set.Version >= 2);
@@ -23,7 +23,7 @@ public sealed class SmScriptSetTests
         Assert.Equal(7, set.Scripts.Count);
         Assert.Equal("001-script-schema.txt", set.Scripts[0].Name);
         Assert.Equal(SmScriptSet.MetabaseModule, set.ModuleName);
-        Assert.Equal(1, set.Version);
+        Assert.Equal(2, set.Version);
     }
 
     [Fact]
